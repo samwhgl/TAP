@@ -1,0 +1,52 @@
+rooms:
+  square:
+    name: "Village Square"
+    description: "La grand place comme a bx."
+    exits:
+      north: "tavern"
+      east: "shop"
+    items: ["old_sword"]
+    npcs: ["old_man"]
+  tavern:
+    name: "The Tavern"
+    description: "Une taverne chaleureuse."
+    exits:
+      south: "square"
+    items: ["frothy_ale"]
+    npcs: ["innkeeper"]
+  shop:
+    name: "General Store"
+    description: "Un delhaize !"
+    exits:
+      west: "square"
+    npcs: ["goblin"]
+
+items:
+  old_sword:
+    name: "Old Sword"
+    description: "Une épée"
+    obtainable: true
+  frothy_ale:
+    name: "Frothy Ale"
+    description: "Une bière rafraîchissant"
+    obtainable: true
+
+npcs:
+  old_man:
+    name: "Old Man"
+    description: "Un vieux sage
+    dialogue: ["Salutations, voyageur !"]
+    hp: 50
+    npc_type: "friendly"
+  innkeeper:
+    name: "Innkeeper"
+    description: "Le tavernier."
+    dialogue: ["Bienvenue à la taverne !"]
+    hp: 100
+    npc_type: "friendly"
+  goblin:
+    name: "Goblin"
+    description: "Un ."
+    dialogue: ["KREEE ! Tu vas mourir !"]
+    hp: 50
+    npc_type: "enemy"

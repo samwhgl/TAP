@@ -1,10 +1,21 @@
 [package]
-name = "tap_server"
+name = "tap_game"
 version = "0.1.0"
 edition = "2024"
+
+# Configuration des deux binaires exécutables
+[[bin]]
+name = "tap_server"
+path = "src/main.rs"
+
+[[bin]]
+name = "tap_cli"
+path = "src/cli_main.rs"
 
 [dependencies]
 colored = "3.1.1"
 eframe = "0.34.3"
 egui = "0.34.3"
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
