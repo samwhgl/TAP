@@ -3,15 +3,23 @@ use std::sync::{Arc, Mutex};
 use std::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{mpsc};
 use serde::Deserialize;
+
+
+enum ViewScope {
+	Global,
+	Room,
+	Group
+}
 
 #[derive(Clone)]
 struct Player {
     name: String,
     room_id: String,
+    group_id: Option<String>,
     hp: i32,
-    inventory: Vec<String>,
+    inventory: Vec<String>
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -109,15 +117,41 @@ impl World {
     }
 }
 
+
+type Event = (Vec<String>, String);
 type SharedWorld = Arc<Mutex<World>>;
-type EventSender = broadcast::Sender<String>;
+type Mailboxes = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>;
+
+
+fn players_in_scope(
+	player: &Player,
+	world: &World,
+	scope: ViewScope
+) -> Vec<String> {
+	match scope {
+		ViewScope::Global => world.players.keys().cloned().collect(),
+		ViewScope::Room => {
+			world.players
+				.iter()
+				.filter(|(_, p)| p.room_id == player.room_id)
+				.map(|(name, _)| name.clone()).collect()
+		},
+		ViewScope::Group => match &player.group_id {
+			Some(_) => world.players
+				.iter()
+				.filter(|(_, p)| p.group_id == player.group_id)
+				.map(|(name, _)| name.clone()).collect(),
+			None => Vec::new()
+		}
+	}
+}
 
 
 fn handle_command(
     line: &str,
     player_name: &mut Option<String>,
     world: &SharedWorld,
-) -> (String, Option<String>) {
+) -> (String, Vec<Event>) {
     let trimmed = line.trim();
     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
 
@@ -127,16 +161,21 @@ fn handle_command(
             let player = Player {
                 name: name.to_string(),
                 room_id: "square".to_string(),
+				group_id: None,
                 hp: 100,
                 inventory: Vec::new(),
             };
+			let player_clone: Player = player.clone();
             w.players.insert(name.to_string(), player);
             *player_name = Some(name.to_string());
             println!("Player {} connected", name);
 
-            let res = "OK connected\n".to_string();
-            let evt = Some(format!("EVT ROOM PRESENCE ENTER {}\n", name));
-            (res, evt)
+            let response = "OK connected\n".to_string();
+            let events: Vec<Event> = vec![(
+				players_in_scope(&player_clone, &w, ViewScope::Room),
+				format!("EVT ROOM PRESENCE ENTER {}\n", name)
+			)];
+            (response, events)
         }
 
         ["LOOK"] => {
@@ -159,15 +198,15 @@ fn handle_command(
                             room.npcs.iter().collect::<Vec<_>>(),
                             player.hp
                         );
-                        (res, None)
+                        (res, Vec::new())
                     } else {
-                        ("ERR room_not_found\n".to_string(), None)
+                        ("ERR room_not_found\n".to_string(), Vec::new())
                     }
                 } else {
-                    ("ERR not_connected\n".to_string(), None)
+                    ("ERR not_connected\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -177,7 +216,7 @@ fn handle_command(
 
                 let current_room_id = match w.players.get(name) {
                     Some(p) => p.room_id.clone(),
-                    None => return ("ERR not_connected\n".to_string(), None),
+                    None => return ("ERR not_connected\n".to_string(), Vec::new()),
                 };
 
                 let next_room_id = w.rooms.get(&current_room_id)
@@ -185,18 +224,33 @@ fn handle_command(
                     .cloned();
 
                 if let Some(next) = next_room_id {
+                    let leavers: Vec<String> = {
+                        let me = w.players.get(name).unwrap();
+                        players_in_scope(me, &w, ViewScope::Room)
+                            .into_iter().filter(|n| n.as_str() != name.as_str()).collect()
+                    };
+
                     if let Some(p) = w.players.get_mut(name) {
                         p.room_id = next.clone();
                     }
 
+                    let enterers: Vec<String> = {
+                        let me = w.players.get(name).unwrap();
+                        players_in_scope(me, &w, ViewScope::Room)
+                            .into_iter().filter(|n| n.as_str() != name.as_str()).collect()
+                    };
+
                     let res = format!("OK room={}\n", next);
-                    let evt = Some(format!("EVT ROOM PRESENCE ENTER {}\n", name));
-                    (res, evt)
+                    let events: Vec<Event> = vec![
+                        (leavers, format!("EVT ROOM PRESENCE LEAVE {}\n", name)),
+                        (enterers, format!("EVT ROOM PRESENCE ENTER {}\n", name)),
+                    ];
+                    (res, events)
                 } else {
-                    ("ERR no_exit\n".to_string(), None)
+                    ("ERR no_exit\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -217,18 +271,18 @@ fn handle_command(
                 if let Some(id) = target_item_id {
                     let obtainable = w.items.get(&id).unwrap().obtainable;
                     if !obtainable {
-                        return ("ERR item_not_obtainable\n".to_string(), None);
+                        return ("ERR item_not_obtainable\n".to_string(), Vec::new());
                     }
 
                     w.rooms.get_mut(&room_id).unwrap().items.remove(&id);
                     w.players.get_mut(name).unwrap().inventory.push(id.clone());
 
-                    (format!("OK taken={}\n", id), None)
+                    (format!("OK taken={}\n", id), Vec::new())
                 } else {
-                    ("ERR item_not_found\n".to_string(), None)
+                    ("ERR item_not_found\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -252,12 +306,12 @@ fn handle_command(
 
                     w.rooms.get_mut(&room_id).unwrap().items.insert(id.clone());
 
-                    (format!("OK dropped={}\n", id), None)
+                    (format!("OK dropped={}\n", id), Vec::new())
                 } else {
-                    ("ERR item_not_in_inventory\n".to_string(), None)
+                    ("ERR item_not_in_inventory\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -265,9 +319,9 @@ fn handle_command(
             if let Some(name) = player_name {
                 let w = world.lock().unwrap();
                 let player = w.players.get(name).unwrap();
-                (format!("OK {:?}\n", player.inventory), None)
+                (format!("OK {:?}\n", player.inventory), Vec::new())
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -295,12 +349,12 @@ fn handle_command(
                         "..."
                     };
 
-                    (format!("OK npc=\"{}\" talk=\"{}\"\n", npc_data.name, response_text), None)
+                    (format!("OK npc=\"{}\" talk=\"{}\"\n", npc_data.name, response_text), Vec::new())
                 } else {
-                    ("ERR npc_not_found\n".to_string(), None)
+                    ("ERR npc_not_found\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -332,7 +386,7 @@ fn handle_command(
                     if npc_hp <= 0 {
                         w.rooms.get_mut(&room_id).unwrap().npcs.remove(&id);
                         log_msg.push_str(" Le monstre est mort !");
-                        return (format!("OK combat=\"{}\"\n", log_msg), None);
+                        return (format!("OK combat=\"{}\"\n", log_msg), Vec::new());
                     }
 
                     if npc_type == "enemy" {
@@ -362,22 +416,39 @@ fn handle_command(
                         }
                     }
 
-                    (format!("OK combat=\"{}\"\n", log_msg), None)
+                    (format!("OK combat=\"{}\"\n", log_msg), Vec::new())
                 } else {
-                    ("ERR target_not_found\n".to_string(), None)
+                    ("ERR target_not_found\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
-        ["CHAT", channel, message] => {
+		["CHAT", _] => ("ERR EMPTY_MESSAGE\n".to_string(), Vec::new()),
+        ["CHAT", channel, msg] => {
             if let Some(name) = player_name {
-                let res = "OK\n".to_string();
-                let evt = Some(format!("EVT {} CHAT {} {}\n", channel, name, message));
-                (res, evt)
+				let w = world.lock().unwrap();
+        		let player = w.players.get(name).unwrap();
+				let scope = match *channel {
+					"GLOBAL" => ViewScope::Global,
+					"ROOM"   => ViewScope::Room,
+					"GROUP"  => ViewScope::Group,
+					_ => return ("ERR BAD_SCOPE\n".to_string(), Vec::new())
+				};
+
+				if matches!(scope, ViewScope::Group) && player.group_id.is_none() {
+					return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new());
+				}
+
+				let response = "OK\n".to_string();
+				let event: Vec<Event> = vec![(
+					players_in_scope(player, &w, scope),
+					format!("EVT {} CHAT {} {}\n", channel, name, msg)
+				)];
+				(response, event)
             } else {
-                ("ERR not_connected\n".to_string(), None)
+                ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
@@ -389,14 +460,14 @@ fn handle_command(
                 names.len(),
                 names
             );
-            (res, None)
+            (res, Vec::new())
         }
 
         ["QUIT"] => {
-            ("OK bye\n".to_string(), None)
+            ("OK bye\n".to_string(), Vec::new())
         }
 
-        _ => ("ERR unknown_command\n".to_string(), None),
+        _ => ("ERR unknown_command\n".to_string(), Vec::new()),
     }
 }
 
@@ -412,9 +483,7 @@ async fn main() {
     };
 
     let world: SharedWorld = Arc::new(Mutex::new(world_data));
-
-    let (tx, _rx) = broadcast::channel::<String>(100);
-    let tx = Arc::new(tx);
+	let mailboxes: Mailboxes = Arc::new(Mutex::new(HashMap::new()));
 
     let listener = TcpListener::bind("0.0.0.0:4242").await.unwrap();
     println!("Server listening on port 4242");
@@ -424,10 +493,10 @@ async fn main() {
         println!("New connection from {}", addr);
 
         let world_clone = Arc::clone(&world);
-        let tx_clone = Arc::clone(&tx);
+		let boxes_clone: Mailboxes = Arc::clone(&mailboxes);
 
         tokio::spawn(async move {
-            handle_client(socket, addr, world_clone, tx_clone).await;
+            handle_client(socket, addr, world_clone, boxes_clone).await;
         });
     }
 }
@@ -436,11 +505,11 @@ async fn handle_client(
     socket: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
     world: SharedWorld,
-    tx: Arc<EventSender>,
+	mailboxes: Mailboxes
 ) {
     let (reader, mut writer) = socket.into_split();
     let mut reader = BufReader::new(reader);
-    let mut rx = tx.subscribe();
+	let (mailbox_tx, mut mailbox_rx) = mpsc::unbounded_channel::<String>();
 
     let mut line = String::new();
     let mut player_name: Option<String> = None;
@@ -456,39 +525,49 @@ async fn handle_client(
             result = reader.read_line(&mut line) => {
                 match result {
                     Ok(0) | Err(_) => {
-                        handle_disconnect(&player_name, &world, &tx).await;
+                        handle_disconnect(&player_name, &world, &mailboxes).await;
                         break;
                     }
                     Ok(_) => {
                         if line.trim() == "QUIT" {
                             let _ = writer.write_all(b"OK bye\n").await;
-                            handle_disconnect(&player_name, &world, &tx).await;
+                            handle_disconnect(&player_name, &world, &mailboxes).await;
                             break;
                         }
 
+						let was_connected = player_name.is_some();
                         let (response, event) = handle_command(&line, &mut player_name, &world);
+						if !was_connected {
+							if let Some(name) = &player_name {
+								mailboxes.lock().unwrap().insert(name.clone(), mailbox_tx.clone());
+							}
+						}
 
                         if let Err(e) = writer.write_all(response.as_bytes()).await {
                             println!("Write error for {}: {}", addr, e);
                             break;
                         }
 
-                        if let Some(evt_msg) = event {
-                            let _ = tx.send(evt_msg);
+                        for (recipients, msg) in event {
+                            let boxes = mailboxes.lock().unwrap();
+							for name in recipients {
+								if let Some(box_tx) = boxes.get(&name) {
+									let _ = box_tx.send(msg.clone());
+								}
+							}
                         }
                     }
                 }
             }
 
-            result = rx.recv() => {
-                match result {
-                    Ok(event) => {
-                        if let Err(_) = writer.write_all(event.as_bytes()).await {
+            event = mailbox_rx.recv() => {
+                match event {
+                    Some(msg) => {
+                        if let Err(_) = writer.write_all(msg.as_bytes()).await {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+					None => break
                 }
             }
         }
@@ -500,14 +579,28 @@ async fn handle_client(
 async fn handle_disconnect(
     player_name: &Option<String>,
     world: &SharedWorld,
-    tx: &Arc<EventSender>,
+    mailboxes: &Mailboxes
 ) {
     if let Some(name) = player_name {
-        world.lock().unwrap().players.remove(name);
+		let recipients = {
+			let mut w = world.lock().unwrap();
+			let recipients = match w.players.get(name) {
+				Some(player) => players_in_scope(player, &w, ViewScope::Room),
+				None => Vec::new()
+			};
+			w.players.remove(name);
+			recipients
+		};
 
-        let event = format!("EVT ROOM PRESENCE LEAVE {}\n", name);
-        let _ = tx.send(event);
+		mailboxes.lock().unwrap().remove(name);
 
+        let msg = format!("EVT ROOM PRESENCE LEAVE {}\n", name);
+        let boxes = mailboxes.lock().unwrap();
+        for recipient in recipients {
+            if let Some(box_tx) = boxes.get(&recipient) {
+				let _ = box_tx.send(msg.clone());
+			}
+        }
         println!("Player {} disconnected", name);
     }
 }
