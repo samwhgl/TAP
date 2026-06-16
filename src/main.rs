@@ -18,6 +18,7 @@ struct Player {
     name: String,
     room_id: String,
     group_id: Option<String>,
+	invites: Vec<String>,
     hp: i32,
     inventory: Vec<String>
 }
@@ -162,6 +163,7 @@ fn handle_command(
                 name: name.to_string(),
                 room_id: "square".to_string(),
 				group_id: None,
+				invites: Vec::new(),
                 hp: 100,
                 inventory: Vec::new(),
             };
@@ -462,6 +464,144 @@ fn handle_command(
             );
             (res, Vec::new())
         }
+
+		["GROUP", "CREATE"] => {
+			if let Some(name) = player_name {
+				let mut w = world.lock().unwrap();
+				let player = w.players.get_mut(name).unwrap();
+
+				if player.group_id.is_some() {
+					return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
+				}
+
+				player.group_id = Some(name.clone());
+				(format!("OK group={}\n", name), Vec::new())
+            } else {
+				("ERR not_connected\n".to_string(), Vec::new())
+			}
+		}
+
+		["GROUP", "INVITE", target_name] => {
+			if let Some(name) = player_name {
+				let mut w = world.lock().unwrap();
+				let player = w.players.get(name).unwrap();
+				let group_name = match &player.group_id {
+					Some(n) => n.clone(),
+					None => return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new())
+				};
+				if *target_name == name.as_str() {
+					return ("ERR CANT_INVITE_SELF\n".to_string(), Vec::new());
+				}
+				let target = match w.players.get_mut(*target_name) {
+					Some(t) => t,
+					None => return ("ERR PLAYER_NOT_FOUND\n".to_string(), Vec::new())
+				};
+
+				if target.group_id.is_some() {
+					return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
+				}
+				if target.invites.contains(&group_name) {
+					return ("ERR ALREADY_INVITED\n".to_string(), Vec::new())
+				}
+				target.invites.push(group_name.clone());
+
+				let response = "OK\n".to_string();
+				let events: Vec<Event> = vec![(
+					vec![target_name.to_string()],
+					format!("EVT GROUP INVITE {}\n", group_name)
+				)];
+				(response, events)
+            } else {
+				("ERR not_connected\n".to_string(), Vec::new())
+			}
+		}
+
+		["GROUP", "JOIN", leader_name] => {
+			if let Some(name) = player_name {
+				let mut w = world.lock().unwrap();
+
+				let player = w.players.get(name).unwrap();
+				if player.group_id.is_some() {
+					return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
+				}
+				if !player.invites.iter().any(|invite| invite.as_str() == *leader_name) {
+					return ("ERR NOT_INVITED\n".to_string(), Vec::new());
+				}
+
+				let group_exists = w.players.values()
+					.any(|p| p.group_id.as_deref() == Some(*leader_name));
+				if !group_exists {
+					return ("ERR GROUP_NOT_FOUND\n".to_string(), Vec::new());
+				}
+
+				let player = w.players.get_mut(name).unwrap();
+				player.group_id = Some(leader_name.to_string());
+				player.invites.retain(|invite| invite.as_str() != *leader_name);
+
+				let player = w.players.get(name).unwrap();
+				let recipients: Vec<String> = players_in_scope(player, &w, ViewScope::Group)
+					.into_iter().filter(|n| n.as_str() != name.as_str()).collect();
+
+				let response = format!("OK group={}\n", leader_name);
+				let events: Vec<Event> = vec![(
+					recipients,
+					format!("EVT GROUP JOIN {}\n", name)
+				)];
+				(response, events)
+            } else {
+				("ERR not_connected\n".to_string(), Vec::new())
+			}
+		}
+
+		["GROUP", "LEAVE"] => {
+			if let Some(name) = player_name {
+				let mut w = world.lock().unwrap();
+
+				let player = w.players.get(name).unwrap();
+				let group_name = match &player.group_id {
+					Some(g) => g.clone(),
+					None => return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new()),
+				};
+
+				if name.as_str() == group_name.as_str() {
+					let members: Vec<String> = w.players.iter()
+						.filter(|(_, p)| p.group_id.as_deref() == Some(group_name.as_str()))
+						.map(|(n, _)| n.clone())
+						.collect();
+
+					for member in &members {
+						if let Some(p) = w.players.get_mut(member) {
+							p.group_id = None;
+						}
+					}
+
+					let recipients: Vec<String> = members.into_iter()
+						.filter(|n| n.as_str() != name.as_str()).collect();
+					let events: Vec<Event> = vec![(
+						recipients,
+						format!("EVT GROUP LEAVE {}\n", name)
+					)];
+					("OK\n".to_string(), events)
+				} else {
+					let recipients: Vec<String> = {
+						let player = w.players.get(name).unwrap();
+						players_in_scope(player, &w, ViewScope::Group)
+							.into_iter().filter(|n| n.as_str() != name.as_str()).collect()
+					};
+
+					let player = w.players.get_mut(name).unwrap();
+					player.group_id = None;
+
+					let events: Vec<Event> = vec![(
+						recipients,
+						format!("EVT GROUP LEAVE {}\n", name)
+					)];
+					("OK\n".to_string(), events)
+				}
+			} else {
+				("ERR not_connected\n".to_string(), Vec::new())
+			}
+		}
 
         ["QUIT"] => {
             ("OK bye\n".to_string(), Vec::new())
