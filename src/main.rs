@@ -148,6 +148,45 @@ fn players_in_scope(
 }
 
 
+fn leave_group(world: &mut World, name: &str) -> Vec<Event> {
+	let Some(player) = world.players.get(name) else {
+		return Vec::new();
+	};
+	let Some(group_name) = player.group_id.clone() else {
+		return Vec::new();
+	};
+
+	if name == group_name.as_str() {
+		let members: Vec<String> = world.players.iter()
+			.filter(|(_, p)| p.group_id.as_deref() == Some(group_name.as_str()))
+			.map(|(n, _)| n.clone())
+			.collect();
+
+		for member in &members {
+			if let Some(p) = world.players.get_mut(member) {
+				p.group_id = None;
+			}
+		}
+
+		let recipients: Vec<String> = members.into_iter()
+			.filter(|n| n.as_str() != name).collect();
+		vec![(recipients, format!("EVT GROUP LEAVE {}\n", name))]
+	} else {
+		let recipients: Vec<String> = {
+			let player = world.players.get(name).unwrap();
+			players_in_scope(player, world, ViewScope::Group)
+				.into_iter().filter(|n| n.as_str() != name).collect()
+		};
+
+		if let Some(p) = world.players.get_mut(name) {
+			p.group_id = None;
+		}
+
+		vec![(recipients, format!("EVT GROUP LEAVE {}\n", name))]
+	}
+}
+
+
 fn handle_command(
     line: &str,
     player_name: &mut Option<String>,
@@ -556,48 +595,11 @@ fn handle_command(
 		["GROUP", "LEAVE"] => {
 			if let Some(name) = player_name {
 				let mut w = world.lock().unwrap();
-
-				let player = w.players.get(name).unwrap();
-				let group_name = match &player.group_id {
-					Some(g) => g.clone(),
-					None => return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new()),
-				};
-
-				if name.as_str() == group_name.as_str() {
-					let members: Vec<String> = w.players.iter()
-						.filter(|(_, p)| p.group_id.as_deref() == Some(group_name.as_str()))
-						.map(|(n, _)| n.clone())
-						.collect();
-
-					for member in &members {
-						if let Some(p) = w.players.get_mut(member) {
-							p.group_id = None;
-						}
-					}
-
-					let recipients: Vec<String> = members.into_iter()
-						.filter(|n| n.as_str() != name.as_str()).collect();
-					let events: Vec<Event> = vec![(
-						recipients,
-						format!("EVT GROUP LEAVE {}\n", name)
-					)];
-					("OK\n".to_string(), events)
-				} else {
-					let recipients: Vec<String> = {
-						let player = w.players.get(name).unwrap();
-						players_in_scope(player, &w, ViewScope::Group)
-							.into_iter().filter(|n| n.as_str() != name.as_str()).collect()
-					};
-
-					let player = w.players.get_mut(name).unwrap();
-					player.group_id = None;
-
-					let events: Vec<Event> = vec![(
-						recipients,
-						format!("EVT GROUP LEAVE {}\n", name)
-					)];
-					("OK\n".to_string(), events)
+				let in_group = w.players.get(name).map(|p| p.group_id.is_some()).unwrap_or(false);
+				if !in_group {
+					return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new());
 				}
+				("OK\n".to_string(), leave_group(&mut w, name))
 			} else {
 				("ERR not_connected\n".to_string(), Vec::new())
 			}
@@ -722,24 +724,28 @@ async fn handle_disconnect(
     mailboxes: &Mailboxes
 ) {
     if let Some(name) = player_name {
-		let recipients = {
+		let events: Vec<Event> = {
 			let mut w = world.lock().unwrap();
-			let recipients = match w.players.get(name) {
-				Some(player) => players_in_scope(player, &w, ViewScope::Room),
-				None => Vec::new()
-			};
+			let mut events = Vec::new();
+			if let Some(player) = w.players.get(name) {
+				let room: Vec<String> = players_in_scope(player, &w, ViewScope::Room)
+					.into_iter().filter(|n| n.as_str() != name.as_str()).collect();
+				events.push((room, format!("EVT ROOM PRESENCE LEAVE {}\n", name)));
+			}
+			events.extend(leave_group(&mut w, name));
 			w.players.remove(name);
-			recipients
+			events
 		};
 
 		mailboxes.lock().unwrap().remove(name);
 
-        let msg = format!("EVT ROOM PRESENCE LEAVE {}\n", name);
         let boxes = mailboxes.lock().unwrap();
-        for recipient in recipients {
-            if let Some(box_tx) = boxes.get(&recipient) {
-				let _ = box_tx.send(msg.clone());
-			}
+        for (recipients, line) in events {
+            for recipient in recipients {
+                if let Some(box_tx) = boxes.get(&recipient) {
+					let _ = box_tx.send(line.clone());
+				}
+            }
         }
         println!("Player {} disconnected", name);
     }
