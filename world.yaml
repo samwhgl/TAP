@@ -19,6 +19,7 @@ rooms:
     description: "Un delhaize !"
     exits:
       west: "square"
+    items: ["healing_herb"]
     npcs: ["goblin"]
 
 items:
@@ -30,6 +31,14 @@ items:
     name: "Frothy Ale"
     description: "Une bière rafraîchissant"
     obtainable: true
+  healing_herb:
+    name: "Healing Herb"
+    description: "Une herbe aux vertues curatives."
+    obtainable: true
+  gold_coin:
+    name: "Gold Coin"
+    description: "Une piece d'or brillante."
+    obtainable: false
 
 npcs:
   old_man:
@@ -50,3 +59,17 @@ npcs:
     dialogue: ["KREEE ! Tu vas mourir !"]
     hp: 50
     npc_type: "enemy"
+
+quests:
+  herb_hunt:
+    giver: old_man
+    description: "Le vieux sage a besoin de fu... d'une herbe medicinale."
+    reward: gold_coin
+    steps:
+      - description: "Aller jusqu'au magasin."
+        kind: !reach
+          room: shop
+      - description: "Ramasser l'herbe medicinale."
+        kind: !collect
+          item: healing_herb
+          count: 1

@@ -20,7 +20,9 @@ struct Player {
     group_id: Option<String>,
 	invites: Vec<String>,
     hp: i32,
-    inventory: Vec<String>
+    inventory: Vec<String>,
+    active_quests: HashMap<String, usize>,
+    completed_quests: HashSet<String>
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -56,6 +58,31 @@ struct Room {
     npcs: HashSet<String>,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+enum StepKind {
+    Reach { room: String },
+    Collect { item: String, #[serde(default = "default_count")] count: u32 },
+    Talk { npc: String },
+    Defeat { npc: String }
+}
+
+fn default_count() -> u32 { 1 }
+
+#[derive(Deserialize, Debug, Clone)]
+struct Step {
+    description: String,
+    kind: StepKind
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct Quest {
+    giver: String,
+    description: String,
+    steps: Vec<Step>,
+    reward: String
+}
+
 #[derive(Deserialize, Debug)]
 struct WorldConfig {
     rooms: HashMap<String, Room>,
@@ -63,6 +90,8 @@ struct WorldConfig {
     items: HashMap<String, Item>,
     #[serde(default)]
     npcs: HashMap<String, Npc>,
+    #[serde(default)]
+    quests: HashMap<String, Quest>,
 }
 
 struct World {
@@ -70,6 +99,7 @@ struct World {
     rooms: HashMap<String, Room>,
     items: HashMap<String, Item>,
     npcs: HashMap<String, Npc>,
+    quests: HashMap<String, Quest>,
 }
 
 impl World {
@@ -104,9 +134,37 @@ impl World {
             }
         }
 
+        for (quest_id, quest) in &config.quests {
+            if !config.npcs.contains_key(&quest.giver) {
+                return Err(format!(
+                    "Validation Error: La quête '{}' a un giver '{}' inexistant !",
+                    quest_id, quest.giver
+                ).into());
+            }
+            if !config.items.contains_key(&quest.reward) {
+                return Err(format!(
+                    "Validation Error: La quête '{}' a une récompense '{}' inexistante !",
+                    quest_id, quest.reward
+                ).into());
+            }
+            for step in &quest.steps {
+                let (exists, target) = match &step.kind {
+                    StepKind::Reach { room } => (config.rooms.contains_key(room), room),
+                    StepKind::Collect { item, .. } => (config.items.contains_key(item), item),
+                    StepKind::Talk { npc } | StepKind::Defeat { npc } => (config.npcs.contains_key(npc), npc),
+                };
+                if !exists {
+                    return Err(format!(
+                        "Validation Error: La quête '{}' référence une cible '{}' inexistante !",
+                        quest_id, target
+                    ).into());
+                }
+            }
+        }
+
         println!(
-            "Monde validé ! {} pièces, {} objets et {} NPCs chargés.",
-            config.rooms.len(), config.items.len(), config.npcs.len()
+            "Monde validé ! {} pièces, {} objets, {} NPCs et {} quêtes chargés.",
+            config.rooms.len(), config.items.len(), config.npcs.len(), config.quests.len()
         );
 
         Ok(World {
@@ -114,6 +172,7 @@ impl World {
             rooms: config.rooms,
             items: config.items,
             npcs: config.npcs,
+            quests: config.quests,
         })
     }
 }
@@ -205,6 +264,8 @@ fn handle_command(
 				invites: Vec::new(),
                 hp: 100,
                 inventory: Vec::new(),
+                active_quests: HashMap::new(),
+                completed_quests: HashSet::new(),
             };
 			let player_clone: Player = player.clone();
             w.players.insert(name.to_string(), player);
@@ -461,6 +522,72 @@ fn handle_command(
                 } else {
                     ("ERR target_not_found\n".to_string(), Vec::new())
                 }
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+		_ if trimmed.starts_with("QUEST ") => {
+            if let Some(name) = player_name {
+                let npc_id = trimmed["QUEST ".len()..].trim();
+                let mut w = world.lock().unwrap();
+				let player = w.players.get(name).unwrap();
+				
+				if  w.npcs.get(npc_id).is_none() {
+					return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+				}
+				if !w.rooms.get(&player.room_id).unwrap().npcs.contains(npc_id) {
+					return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+				}
+
+                let mut found_quest: Option<String> = None;
+                for (quest_id, quest) in &w.quests {
+                    if quest.giver == npc_id
+						&& !player.completed_quests.contains(quest_id)
+						&& !player.active_quests.contains_key(quest_id)
+					{
+                        found_quest = Some(quest_id.clone());
+                        break;
+                    }
+                }
+                let quest_id = match found_quest {
+                    Some(id) => id,
+                    None => return ("ERR 406 NO_QUEST_AVAILABLE\n".to_string(), Vec::new())
+                };
+
+                let quest = w.quests.get(&quest_id).unwrap();
+                let response = format!(
+                    "OK {{\"quest_id\": \"{}\", \"description\": \"{}\", \"reward\": \"{}\", \"status\": \"{}\"}}\n",
+                    quest_id, quest.description, quest.reward, "available"
+                );
+				w.players.get_mut(name).unwrap().active_quests.insert(quest_id.clone(), 0);
+                (response, Vec::new())
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["QUESTS"] => {
+            if let Some(name) = player_name {
+                let w = world.lock().unwrap();
+                let player = w.players.get(name).unwrap();
+
+                let mut quests_strs: Vec<String> = Vec::new();
+                for (quest_id, step) in &player.active_quests {
+                    let total = w.quests.get(quest_id).map(|quest| quest.steps.len()).unwrap_or(0);
+                    quests_strs.push(format!(
+                        "{{\"quest_id\": \"{}\", \"status\": \"active\", \"progress\": \"{}/{}\"}}",
+                        quest_id, step, total
+                    ));
+                }
+                for quest_id in &player.completed_quests {
+                    quests_strs.push(format!(
+                        "{{\"quest_id\": \"{}\", \"status\": \"completed\"}}",
+                        quest_id
+                    ));
+                }
+
+                (format!("OK [{}]\n", quests_strs.join(", ")), Vec::new())
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
