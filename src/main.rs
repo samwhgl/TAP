@@ -13,6 +13,11 @@ enum ViewScope {
 	Group
 }
 
+enum Trigger {
+	Reach,
+	Collect
+}
+
 #[derive(Clone)]
 struct Player {
     name: String,
@@ -70,7 +75,7 @@ enum StepKind {
 fn default_count() -> u32 { 1 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct Step {
+struct QuestStep {
     description: String,
     kind: StepKind
 }
@@ -79,7 +84,7 @@ struct Step {
 struct Quest {
     giver: String,
     description: String,
-    steps: Vec<Step>,
+    steps: Vec<QuestStep>,
     reward: String
 }
 
@@ -246,6 +251,61 @@ fn leave_group(world: &mut World, name: &str) -> Vec<Event> {
 }
 
 
+fn advance_quests(world: &mut World, name: &str, trigger: Trigger) -> Vec<Event> {
+	let mut events: Vec<Event> = Vec::new();
+	let active_quests: Vec<String> = match world.players.get(name) {
+		Some(player) => player.active_quests.keys().cloned().collect(),
+		None => return events
+	};
+
+	for quest_id in active_quests {
+		let quest = match world.quests.get(&quest_id) {
+			Some(q) => q,
+			None => continue
+		};
+
+		let step = match world.players.get(name).unwrap().active_quests.get(&quest_id) {
+			Some(s) => *s,
+			None => continue
+		};		
+		let total = quest.steps.len();
+		if step >= total {
+			continue;
+		}
+
+		let kind = quest.steps[step].kind.clone();
+		let player = world.players.get(name).unwrap();
+
+		let satisfied = match (&trigger, &kind) {
+			(Trigger::Reach, StepKind::Reach { room }) => player.room_id == *room,
+			(Trigger::Collect, StepKind::Collect { item, count }) => {
+				player.inventory.iter().filter(|i| *i == item).count() as u32 >= *count
+			}
+			_ => false,
+		};
+		if !satisfied {
+			continue;
+		}
+
+		let new_step = step + 1;
+		let reward = quest.reward.clone();
+		let player = world.players.get_mut(name).unwrap();
+
+		if new_step >= total {
+			player.active_quests.remove(&quest_id);
+			player.completed_quests.insert(quest_id.clone());
+			player.inventory.push(reward);
+			events.push((vec![name.to_string()], format!("EVT QUEST COMPLETED {}\n", quest_id)));
+		} else {
+			player.active_quests.insert(quest_id.clone(), new_step);
+			events.push((vec![name.to_string()], format!("EVT QUEST PROGRESSED {} {}/{}\n", quest_id, new_step, total)));
+		}
+	}
+
+	events
+}
+
+
 fn handle_command(
     line: &str,
     player_name: &mut Option<String>,
@@ -290,14 +350,22 @@ fn handle_command(
                             .map(|(n, _)| n)
                             .collect();
 
+                        let quest_givers: Vec<&String> = room.npcs.iter()
+                            .filter(|npc_id| w.quests.iter().any(|(quest_id, quest)|
+                                quest.giver.as_str() == npc_id.as_str()
+                                && !player.completed_quests.contains(quest_id)
+                                && !player.active_quests.contains_key(quest_id)))
+                            .collect();
+
                         let res = format!(
-                            "OK {{\"room\": \"{}\", \"desc\": \"{}\", \"exits\": {:?}, \"players\": {:?}, \"items\": {:?}, \"npcs\": {:?}, \"your_hp\": {}}}\n",
+                            "OK {{\"room\": \"{}\", \"desc\": \"{}\", \"exits\": {:?}, \"players\": {:?}, \"items\": {:?}, \"npcs\": {:?}, \"available_quests\": {:?}, \"your_hp\": {}}}\n",
                             room.name,
                             room.description,
                             room.exits.keys().collect::<Vec<_>>(),
                             players_here,
                             room.items.iter().collect::<Vec<_>>(),
                             room.npcs.iter().collect::<Vec<_>>(),
+                            quest_givers,
                             player.hp
                         );
                         (res, Vec::new())
@@ -343,10 +411,11 @@ fn handle_command(
                     };
 
                     let res = format!("OK room={}\n", next);
-                    let events: Vec<Event> = vec![
+                    let mut events: Vec<Event> = vec![
                         (leavers, format!("EVT ROOM PRESENCE LEAVE {}\n", name)),
                         (enterers, format!("EVT ROOM PRESENCE ENTER {}\n", name)),
                     ];
+                    events.extend(advance_quests(&mut w, name, Trigger::Reach));
                     (res, events)
                 } else {
                     ("ERR no_exit\n".to_string(), Vec::new())
@@ -379,7 +448,8 @@ fn handle_command(
                     w.rooms.get_mut(&room_id).unwrap().items.remove(&id);
                     w.players.get_mut(name).unwrap().inventory.push(id.clone());
 
-                    (format!("OK taken={}\n", id), Vec::new())
+                    let events = advance_quests(&mut w, name, Trigger::Collect);
+                    (format!("OK taken={}\n", id), events)
                 } else {
                     ("ERR item_not_found\n".to_string(), Vec::new())
                 }
@@ -558,7 +628,7 @@ fn handle_command(
                 let quest = w.quests.get(&quest_id).unwrap();
                 let response = format!(
                     "OK {{\"quest_id\": \"{}\", \"description\": \"{}\", \"reward\": \"{}\", \"status\": \"{}\"}}\n",
-                    quest_id, quest.description, quest.reward, "available"
+                    quest_id, quest.description, quest.reward, "received"
                 );
 				w.players.get_mut(name).unwrap().active_quests.insert(quest_id.clone(), 0);
                 (response, Vec::new())
@@ -574,10 +644,18 @@ fn handle_command(
 
                 let mut quests_strs: Vec<String> = Vec::new();
                 for (quest_id, step) in &player.active_quests {
-                    let total = w.quests.get(quest_id).map(|quest| quest.steps.len()).unwrap_or(0);
+                    let quest = match w.quests.get(quest_id) {
+                        Some(q) => q,
+                        None => continue,
+                    };
+                    let total = quest.steps.len();
+                    let task = match quest.steps.get(*step) {
+						Some(qs) => qs.description.as_str(),
+						None => ""
+					};
                     quests_strs.push(format!(
-                        "{{\"quest_id\": \"{}\", \"status\": \"active\", \"progress\": \"{}/{}\"}}",
-                        quest_id, step, total
+                        "{{\"quest_id\": \"{}\", \"status\": \"active\", \"progress\": \"{}/{}\", \"task\": \"{}\"}}",
+                        quest_id, step, total, task
                     ));
                 }
                 for quest_id in &player.completed_quests {
