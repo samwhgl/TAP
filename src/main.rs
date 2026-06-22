@@ -13,10 +13,11 @@ enum ViewScope {
 	Group
 }
 
-enum Trigger<'a> {
+enum Trigger<'npc> {
 	Reach,
 	Collect,
-	Defeat(&'a str)
+	Defeat(&'npc str),
+	Talk(&'npc str)
 }
 
 #[derive(Clone)]
@@ -283,6 +284,7 @@ fn advance_quests(world: &mut World, name: &str, trigger: Trigger<'_>) -> Vec<Ev
 				player.inventory.iter().filter(|i| *i == item).count() as u32 >= *count
 			}
 			(Trigger::Defeat(killed), StepKind::Defeat { npc }) => *killed == npc.as_str(),
+			(Trigger::Talk(talked), StepKind::Talk { npc }) => *talked == npc.as_str(),
 			_ => false
 		};
 		if !satisfied {
@@ -502,7 +504,7 @@ fn handle_command(
         ["TALK ", ..] | _ if trimmed.starts_with("TALK ") => {
             if let Some(name) = player_name {
                 let npc_query = trimmed["TALK ".len()..].trim();
-                let w = world.lock().unwrap();
+                let mut w = world.lock().unwrap();
 
                 let room_id = w.players.get(name).unwrap().room_id.clone();
                 let room = w.rooms.get(&room_id).unwrap();
@@ -522,8 +524,10 @@ fn handle_command(
                     } else {
                         "..."
                     };
+                    let response = format!("OK npc=\"{}\" talk=\"{}\"\n", npc_data.name, response_text);
 
-                    (format!("OK npc=\"{}\" talk=\"{}\"\n", npc_data.name, response_text), Vec::new())
+                    let events = advance_quests(&mut w, name, Trigger::Talk(&id));
+                    (response, events)
                 } else {
                     ("ERR npc_not_found\n".to_string(), Vec::new())
                 }

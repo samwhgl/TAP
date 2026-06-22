@@ -77,6 +77,9 @@ quests:
         kind: !collect
           item: healing_herb
           count: 1
+      - description: "Retourner voir le vieux sage."
+        kind: !talk
+          npc: old_man
   goblin_slayer:
     giver: innkeeper
     description: "L'aubergiste demande d'avoir, stp frero, l'amabilite d'aller eliminer le gobelin"
