@@ -13,9 +13,10 @@ enum ViewScope {
 	Group
 }
 
-enum Trigger {
+enum Trigger<'a> {
 	Reach,
-	Collect
+	Collect,
+	Defeat(&'a str)
 }
 
 #[derive(Clone)]
@@ -251,7 +252,7 @@ fn leave_group(world: &mut World, name: &str) -> Vec<Event> {
 }
 
 
-fn advance_quests(world: &mut World, name: &str, trigger: Trigger) -> Vec<Event> {
+fn advance_quests(world: &mut World, name: &str, trigger: Trigger<'_>) -> Vec<Event> {
 	let mut events: Vec<Event> = Vec::new();
 	let active_quests: Vec<String> = match world.players.get(name) {
 		Some(player) => player.active_quests.keys().cloned().collect(),
@@ -281,7 +282,8 @@ fn advance_quests(world: &mut World, name: &str, trigger: Trigger) -> Vec<Event>
 			(Trigger::Collect, StepKind::Collect { item, count }) => {
 				player.inventory.iter().filter(|i| *i == item).count() as u32 >= *count
 			}
-			_ => false,
+			(Trigger::Defeat(killed), StepKind::Defeat { npc }) => *killed == npc.as_str(),
+			_ => false
 		};
 		if !satisfied {
 			continue;
@@ -558,7 +560,8 @@ fn handle_command(
                     if npc_hp <= 0 {
                         w.rooms.get_mut(&room_id).unwrap().npcs.remove(&id);
                         log_msg.push_str(" Le monstre est mort !");
-                        return (format!("OK combat=\"{}\"\n", log_msg), Vec::new());
+                        let events = advance_quests(&mut w, name, Trigger::Defeat(&id));
+                        return (format!("OK combat=\"{}\"\n", log_msg), events);
                     }
 
                     if npc_type == "enemy" {

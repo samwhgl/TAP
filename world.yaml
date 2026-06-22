@@ -39,6 +39,10 @@ items:
     name: "Gold Coin"
     description: "Une piece d'or brillante."
     obtainable: false
+  hero_medal:
+    name: "Hero Medal"
+    description: "Une medaille recompensant les heros."
+    obtainable: false
 
 npcs:
   old_man:
@@ -73,3 +77,14 @@ quests:
         kind: !collect
           item: healing_herb
           count: 1
+  goblin_slayer:
+    giver: innkeeper
+    description: "L'aubergiste demande d'avoir, stp frero, l'amabilite d'aller eliminer le gobelin"
+    reward: hero_medal
+    steps:
+      - description: "Aller jusqu'au magasin."
+        kind: !reach
+          room: shop
+      - description: "Vaincre le gobelin."
+        kind: !defeat
+          npc: goblin
