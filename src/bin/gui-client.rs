@@ -1,6 +1,6 @@
 use tokio::net::TcpStream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tap_server::gui_layout::GuiWindow;
+use tap_game::gui_layout::GuiWindow;
 
 #[tokio::main]
 async fn main() -> eframe::Result {
@@ -56,7 +56,7 @@ async fn main() -> eframe::Result {
 
     let native_option = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([780.0, 640.0])
+            .with_inner_size([1280.0, 980.0])
             .with_min_inner_size([300.0, 220.0]),
         ..Default::default()
     };
