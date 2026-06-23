@@ -1,16 +1,21 @@
 use eframe::egui;
 use eframe::egui::RichText;
-use egui::text_edit;
+
+enum ButtonAction {
+    ImmediateSend,
+    Fill,
+}
 
 pub struct GuiWindow {
     input: String,
-    connected: bool,
     tx: tokio::sync::mpsc::Sender<String>,
     rx: std::sync::mpsc::Receiver<String>,
     display_logs: Vec<String>,
 
     chats_inputs: [String; 3],
     chats_logs: [Vec<String>; 3],
+
+    focus_main_input: bool,
 }
 
 impl GuiWindow {
@@ -23,13 +28,14 @@ impl GuiWindow {
 
         Self {
             input: String::new(),
-            connected: false,
             tx,
             rx,
             display_logs: Vec::new(),
 
             chats_inputs: [String::new(), String::new(), String::new()],
             chats_logs: [Vec::new(), Vec::new(), Vec::new()],
+
+            focus_main_input: false,
         }
     }
 
@@ -100,26 +106,63 @@ impl GuiWindow {
                 }
             });
     }
-}
 
-impl eframe::App for GuiWindow {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let mut new_msg = false;
-        while let Ok(msg) = self.rx.try_recv() {
-            self.display_logs.push(msg);
-            new_msg = true;
-        }
-
-        // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
-        // For inspiration and more examples, go to https://emilk.github.io/egui
-        self.draw_left_panel(ui);
+    fn draw_right_panel(&mut self, ui: &mut egui::Ui) {
+        let commands = [
+            ("CONNECT ...", ButtonAction::Fill),
+            ("WHO", ButtonAction::ImmediateSend),
+            ("LOOK", ButtonAction::ImmediateSend),
+            ("TAKE ...", ButtonAction::Fill),
+            ("USE ...", ButtonAction::Fill),
+            ("DROP ...", ButtonAction::Fill),
+            ("ATTACK ...", ButtonAction::Fill),
+            ("CREATE GROUP ...", ButtonAction::Fill),
+            ("JOIN GROUP ...", ButtonAction::Fill),
+            ("LEAVE GROUP ...", ButtonAction::Fill),
+        ];
         egui::Panel::right("right_panel")
-            .default_size(150.0)
-            .resizable(true)
+            .default_size(200.0)
             .show_inside(ui, |ui| {
-                ui.heading("Chat");
+                ui.allocate_ui_with_layout(
+                    egui::Vec2 { x: ui.available_width(), y: ui.available_width()},
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_gray(30))
+                            .corner_radius(4.0)
+                            .show(ui, |ui| {
+                                ui.set_min_size(egui::Vec2::new(ui.available_width() - 30.0, ui.available_width() - 30.0));
+                                ui.centered_and_justified(|ui| {
+                                    ui.small("Temp Text")
+                                })
+                            })
+                    });
                 ui.separator();
+                
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui|{
+                    for (command, action) in commands {
+                        let cmd_button = ui.add_sized([120.0, 30.0], egui::Button::new(command));
+                        if cmd_button.clicked() {
+                            match action {
+                                ButtonAction::ImmediateSend => {
+                                    let command_to_send = format!("{}\n", command);
+                                    let _ = self.tx.try_send(command_to_send.clone());
+                                    self.display_logs.push(format!("=> {}", command));
+                                }
+                                ButtonAction::Fill => {
+                                    let clean_text = command.replace("...", "");
+                                    self.input = clean_text;
+                                    self.focus_main_input = true;
+                                }
+                            }      
+                        }
+                        ui.add_space(20.0);
+                    }
+                });
             });
+
+    }
+    fn draw_bottom_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("bottom_panel").show_inside(ui, |ui| {
             // The top panel is often a good place for a menu bar:
 
@@ -129,8 +172,12 @@ impl eframe::App for GuiWindow {
 
                 let command_input = ui.add_sized(
                     [input_width, ui.spacing().interact_size.y],
-                    egui::TextEdit::singleline(&mut self.input),
+                    egui::TextEdit::singleline(&mut self.input).id(egui::Id::new("main_input")),
                 );
+                if self.focus_main_input {
+                    command_input.request_focus();
+                    self.focus_main_input = false; // On reset le drapeau
+                }
                 let button_clicked = ui.add_sized(
                         [button_width, ui.spacing().interact_size.y],
                         egui::Button::new("Send"),
@@ -152,9 +199,28 @@ impl eframe::App for GuiWindow {
             });
         });
 
+    }
+}
+
+impl eframe::App for GuiWindow {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let mut new_msg = false;
+        while let Ok(msg) = self.rx.try_recv() {
+            self.display_logs.push(msg);
+            new_msg = true;
+        }
+
+        // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
+        // For inspiration and more examples, go to https://emilk.github.io/egui
+        self.draw_left_panel(ui);
+        self.draw_right_panel(ui);
+        self.draw_bottom_panel(ui);
+
+        
+
+
         let central_area = ui.available_rect_before_wrap();
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            // The central panel the region left after adding TopPanel's and SidePanel's
             egui::Frame::NONE
                 .fill(egui::Color32::from_rgb(0, 0, 0))
                 .corner_radius(4.0)
