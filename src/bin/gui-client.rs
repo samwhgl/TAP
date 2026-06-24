@@ -16,7 +16,6 @@ async fn main() -> eframe::Result {
             tokio::select! {
                 msg_from_gui =  rx_from_gui.recv() => {
                     if let Some(msg) = msg_from_gui {
-                        println!("{}", msg);
                         if let Err(e) = writer.write_all(msg.as_bytes()).await {
                             eprintln!("Error while sending to server : {}", e);
                             break;
@@ -35,7 +34,6 @@ async fn main() -> eframe::Result {
                 } => {
                     match msg_from_server {
                         Ok(output) => {
-                            println!("{}", output);
                             if tx_to_gui.send(output).is_err() {
                                 break;
                             }
@@ -56,8 +54,8 @@ async fn main() -> eframe::Result {
 
     let native_option = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 980.0])
-            .with_min_inner_size([300.0, 220.0]),
+            .with_inner_size([1920.0, 1080.0])
+            .with_min_inner_size([1030.0, 1040.0]),
         ..Default::default()
     };
     eframe::run_native(

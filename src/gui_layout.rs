@@ -5,6 +5,10 @@ enum ButtonAction {
     ImmediateSend,
     Fill,
 }
+pub struct ChatLog {
+    username: String,
+    message: String,
+}
 
 pub struct GuiWindow {
     input: String,
@@ -13,7 +17,7 @@ pub struct GuiWindow {
     display_logs: Vec<String>,
 
     chats_inputs: [String; 3],
-    chats_logs: [Vec<String>; 3],
+    chats_logs: [Vec<ChatLog>; 3],
 
     focus_main_input: bool,
 }
@@ -40,6 +44,7 @@ impl GuiWindow {
     fn draw_left_panel(&mut self, ui: &mut egui::Ui, new_chat_msgs: [bool; 3]) {
       egui::Panel::left("left_panel")
             .default_size(400.0)
+            .resizable(false)
             .show_inside(ui, |ui| {
 
                 let chat_height = ui.available_height() / 3.0;
@@ -67,10 +72,15 @@ impl GuiWindow {
                                         .max_height(scroll_height)
                                         .auto_shrink([false, false])
                                         .show(ui, |ui| {
+                                            let color = match i {
+                                                0 => egui::Color32::LIGHT_BLUE,
+                                                1 => egui::Color32::DARK_GREEN,
+                                                2 => egui::Color32::ORANGE,
+                                                _ => egui::Color32::LIGHT_GRAY,
+                                            };
                                             for log in &self.chats_logs[i] {
-                                                ui.label(RichText::new(log.trim()).color(egui::Color32::LIGHT_GRAY));
+                                                ui.label(RichText::new( format!("{}: {} ",log.username, log.message)).color(color)); 
                                             }
-                                            
                                             if new_chat_msgs[i] {
                                                 ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
                                             }
@@ -96,7 +106,7 @@ impl GuiWindow {
                                     if !self.chats_inputs[i].is_empty() {
                                         let command = format!("{} {}\n", chat_commands[i], self.chats_inputs[i].trim());
                                         let _ = self.tx.try_send(command.clone());
-                                        self.chats_logs[i].push(format!("=> {}",self.chats_inputs[i]));
+                                        self.display_logs.push(format!("=> {}",command));
                                         self.chats_inputs[i].clear();
                                     }
                                     text_edit_response.request_focus();
@@ -110,22 +120,29 @@ impl GuiWindow {
                 }
             });
     }
-
+    
     fn draw_right_panel(&mut self, ui: &mut egui::Ui) {
         let commands = [
             ("CONNECT ...", ButtonAction::Fill),
+            ("STATUS", ButtonAction::ImmediateSend),
             ("WHO", ButtonAction::ImmediateSend),
             ("LOOK", ButtonAction::ImmediateSend),
             ("TAKE ...", ButtonAction::Fill),
-            ("USE ...", ButtonAction::Fill),
+            ("INVENTORY", ButtonAction::ImmediateSend),
             ("DROP ...", ButtonAction::Fill),
+            ("TALK ...", ButtonAction::Fill),
+            ("QUEST ...", ButtonAction::Fill),
+            ("QUESTS", ButtonAction::ImmediateSend),
             ("ATTACK ...", ButtonAction::Fill),
             ("GROUP CREATE ...", ButtonAction::Fill),
+            ("GROUP INVITE ...", ButtonAction::Fill),
             ("GROUP JOIN ...", ButtonAction::Fill),
             ("GROUP LEAVE ...", ButtonAction::Fill),
+            ("QUIT", ButtonAction::ImmediateSend),
         ];
         egui::Panel::right("right_panel")
             .default_size(200.0)
+            .resizable(false)
             .show_inside(ui, |ui| {
                 ui.allocate_ui_with_layout(
                     egui::Vec2::splat(ui.available_width()),
@@ -203,6 +220,9 @@ impl GuiWindow {
                                 ButtonAction::ImmediateSend => {
                                     let command_to_send = format!("{}\n", command);
                                     let _ = self.tx.try_send(command_to_send.clone());
+                                    if command_to_send == "QUIT\n" {
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
                                     self.display_logs.push(format!("=> {}", command));
                                 }
                                 ButtonAction::Fill => {
@@ -218,40 +238,62 @@ impl GuiWindow {
             });
 
     }
+    
     fn draw_bottom_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("bottom_panel").show_inside(ui, |ui| {
+        egui::Panel::bottom("bottom_panel")
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let button_width = 50.0;
+                    let input_width = ui.available_width() - button_width - ui.spacing().item_spacing.x;
+                    
+                    let id = egui::Id::new("main_input");
 
-            ui.horizontal(|ui| {
-                let button_width = 50.0;
-                let input_width = ui.available_width() - button_width - ui.spacing().item_spacing.x;
+                    let command_input = ui.add_sized(
+                        [input_width, ui.spacing().interact_size.y],
+                        egui::TextEdit::singleline(&mut self.input).id(id),
+                    );
 
-                let command_input = ui.add_sized(
-                    [input_width, ui.spacing().interact_size.y],
-                    egui::TextEdit::singleline(&mut self.input).id(egui::Id::new("main_input")),
-                );
-                if self.focus_main_input {
-                    command_input.request_focus();
-                    self.focus_main_input = false;
-                }
-                let button_clicked = ui.add_sized(
+                    if self.focus_main_input {
+                        command_input.request_focus();
+
+                        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+                            let len = self.input.chars().count();
+
+                            state.cursor.set_char_range(Some(
+                                egui::text::CCursorRange::one(
+                                    egui::text::CCursor::new(len)
+                                )
+                            ));
+
+                            state.store(ui.ctx(), id);
+                        }
+
+                        self.focus_main_input = false;
+                    }
+                    let button_clicked = ui.add_sized(
                         [button_width, ui.spacing().interact_size.y],
                         egui::Button::new("Send"),
                     )
                     .clicked();
 
-                let enter_pressed = command_input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let enter_pressed = command_input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-                if button_clicked || enter_pressed
-                {
-                    if !self.input.is_empty() {
-                        let command = format!("{}\n", self.input);
-                        let _ = self.tx.try_send(command.clone());
-                        self.display_logs.push(format!("=> {}", command));
-                        self.input.clear();
+                    if button_clicked || enter_pressed {
+                        if !self.input.is_empty() {
+                            let command = format!("{}\n", self.input);
+                            let _ = self.tx.try_send(command.clone());
+                            if command == "QUIT\n" {
+                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                            self.display_logs.push(format!("=> {}", command));
+                            self.input.clear();
+                        }
+                        command_input.request_focus();
                     }
-                    command_input.request_focus();
-                }
-            });
+                });
+            ui.add_space(10.0);
         });
 
     }
@@ -263,13 +305,16 @@ impl eframe::App for GuiWindow {
         let mut new_chat_msgs = [false; 3];
         while let Ok(msg) = self.rx.try_recv() {
             if msg.starts_with("EVT GLOBAL CHAT") {
-                self.chats_logs[0].push(msg);
+                let split_msg: Vec<&str> = msg.splitn(5, ' ').collect();
+                self.chats_logs[0].push(ChatLog{username: split_msg[3].to_string(), message: split_msg[4].to_string()});
                 new_chat_msgs[0] = true;
             } else if msg.starts_with("EVT ROOM CHAT") {
-                self.chats_logs[1].push(msg);
+                let split_msg: Vec<&str> = msg.splitn(5, ' ').collect();
+                self.chats_logs[1].push(ChatLog{username: split_msg[3].to_string(), message: split_msg[4].to_string()});
                 new_chat_msgs[1] = true;
             } else if msg.starts_with("EVT GROUP CHAT") {
-                self.chats_logs[2].push(msg);
+                let split_msg: Vec<&str> = msg.splitn(5, ' ').collect();
+                self.chats_logs[2].push(ChatLog{username: split_msg[3].to_string(), message: split_msg[4].to_string()});
                 new_chat_msgs[2] = true;
             } else {
                 self.display_logs.push(msg);
@@ -281,39 +326,41 @@ impl eframe::App for GuiWindow {
         self.draw_right_panel(ui);
         self.draw_bottom_panel(ui);
 
-
-        let central_area = ui.available_rect_before_wrap();
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            egui::Frame::NONE
-                .fill(egui::Color32::from_rgb(0, 0, 0))
-                .corner_radius(4.0)
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, |ui| {
-                    ui.expand_to_include_rect(central_area);
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for log in &self.display_logs {
-                                let couleur = if log.starts_with("OK") {
-                                    egui::Color32::GREEN
-                                } else if log.starts_with("ERR") {
-                                    egui::Color32::RED
-                                } else if log.starts_with("EVT") {
-                                    egui::Color32::PURPLE
-                                } else if log.starts_with("NB_PLAYERS") {
-                                    egui::Color32::ORANGE
-                                } else {
-                                    egui::Color32::LIGHT_GRAY
-                                };
-                                ui.label(RichText::new(log.trim()).color(couleur));
-                            }
-                        if new_msg {
-                            ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-                        }
-                    })
+            ui.vertical(|ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("The Answer Protocol").size(22.0));
                 });
-
-            ui.separator();
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgb(0, 0, 0))
+                    .corner_radius(4.0)
+                    // .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        // ui.set_height(ui.available_height() - 10.0);
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for log in &self.display_logs {
+                                    let couleur = if log.starts_with("OK") {
+                                        egui::Color32::GREEN
+                                    } else if log.starts_with("ERR") {
+                                        egui::Color32::RED
+                                    } else if log.starts_with("EVT") {
+                                        egui::Color32::PURPLE
+                                    } else if log.starts_with("NB_PLAYERS") {
+                                        egui::Color32::ORANGE
+                                    } else {
+                                        egui::Color32::LIGHT_GRAY
+                                    };
+                                    ui.label(RichText::new(log.trim()).color(couleur));
+                                }
+                            if new_msg {
+                                ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                            }
+                        })
+                    });
+                });
         });
     }
 }
