@@ -20,6 +20,19 @@ enum Trigger<'npc> {
 	Talk(&'npc str)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum Status {
+	Poison
+}
+
+impl Status {
+	fn as_str(&self) -> &str {
+		match self {
+			Status::Poison => "poisoned",
+		}
+	}
+}
+
 #[derive(Clone)]
 struct Player {
     name: String,
@@ -27,9 +40,11 @@ struct Player {
     group_id: Option<String>,
 	invites: Vec<String>,
     hp: i32,
+    max_hp: i32,
     inventory: Vec<String>,
     active_quests: HashMap<String, usize>,
-    completed_quests: HashSet<String>
+    completed_quests: HashSet<String>,
+    statuses: Vec<Status>
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -327,9 +342,11 @@ fn handle_command(
 				group_id: None,
 				invites: Vec::new(),
                 hp: 100,
+                max_hp: 100,
                 inventory: Vec::new(),
                 active_quests: HashMap::new(),
                 completed_quests: HashSet::new(),
+                statuses: Vec::new(),
             };
 			let player_clone: Player = player.clone();
             w.players.insert(name.to_string(), player);
@@ -714,6 +731,30 @@ fn handle_command(
                 names
             );
             (res, Vec::new())
+        }
+
+		["STATUS"] => {
+			if let Some(name) = player_name {
+				let w = world.lock().unwrap();
+				let player = w.players.get(name).unwrap();
+
+				let status = if player.statuses.is_empty() {
+					"healthy".to_string()
+				} else {
+					let str_statuses: Vec<&str> = player.statuses.iter().map(|s| s.as_str()).collect();
+					str_statuses.join(", ")
+				};
+
+				let res = format!(
+					"OK {{\"hp\": {}, \"max_hp\": {}, \"status\": \"{}\"}}\n",
+					player.hp,
+					player.max_hp,
+					status
+				);
+				(res, Vec::new())
+			} else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
         }
 
 		["GROUP", "CREATE"] => {
