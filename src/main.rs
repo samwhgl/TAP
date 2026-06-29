@@ -7,6 +7,9 @@ use tokio::sync::{mpsc};
 use serde::Deserialize;
 
 
+const NPC_POWER: i32 = 15;
+
+
 enum ViewScope {
 	Global,
 	Room,
@@ -18,6 +21,13 @@ enum Trigger<'npc> {
 	Collect,
 	Defeat(&'npc str),
 	Talk(&'npc str)
+}
+
+#[derive(Clone, Copy)]
+enum CombatAction {
+	Attack,
+	Defend,
+	Flee
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,12 +49,14 @@ struct Player {
     room_id: String,
     group_id: Option<String>,
 	invites: Vec<String>,
-    hp: i32,
     max_hp: i32,
+    hp: i32,
+	power: i32,
     inventory: Vec<String>,
     active_quests: HashMap<String, usize>,
     completed_quests: HashSet<String>,
-    statuses: Vec<Status>
+    statuses: Vec<Status>,
+	combat_target: Option<String>
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -52,7 +64,7 @@ struct Item {
     name: String,
     description: String,
     #[serde(default = "default_true")]
-    obtainable: bool,
+    obtainable: bool
 }
 
 fn default_true() -> bool { true }
@@ -64,7 +76,7 @@ struct Npc {
     dialogue: Vec<String>,
     hp: i32,
     #[serde(default = "default_friendly")]
-    npc_type: String,
+    npc_type: String
 }
 
 fn default_friendly() -> String { "friendly".to_string() }
@@ -77,7 +89,7 @@ struct Room {
     #[serde(default)]
     items: HashSet<String>,
     #[serde(default)]
-    npcs: HashSet<String>,
+    npcs: HashSet<String>
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -113,7 +125,7 @@ struct WorldConfig {
     #[serde(default)]
     npcs: HashMap<String, Npc>,
     #[serde(default)]
-    quests: HashMap<String, Quest>,
+    quests: HashMap<String, Quest>
 }
 
 struct World {
@@ -121,7 +133,7 @@ struct World {
     rooms: HashMap<String, Room>,
     items: HashMap<String, Item>,
     npcs: HashMap<String, Npc>,
-    quests: HashMap<String, Quest>,
+    quests: HashMap<String, Quest>
 }
 
 impl World {
@@ -229,6 +241,21 @@ fn players_in_scope(
 }
 
 
+fn find_npc(world: &World, room_id: &str, query: &str) -> Option<String> {
+	let room = match world.rooms.get(room_id) {
+		Some(r) => r,
+		None => return None
+	};
+	room.npcs.iter().find(|id| {
+		if id.as_str() == query { return true; }
+		if let Some(npc) = world.npcs.get(*id) {
+			if npc.name == query { return true; }
+		}
+		false
+	}).cloned()
+}
+
+
 fn leave_group(world: &mut World, name: &str) -> Vec<Event> {
 	let Some(player) = world.players.get(name) else {
 		return Vec::new();
@@ -325,10 +352,139 @@ fn advance_quests(world: &mut World, name: &str, trigger: Trigger<'_>) -> Vec<Ev
 }
 
 
+fn move_player(world: &mut World, name: &str, new_room: &str) -> Vec<Event> {
+	let old_room_players: Vec<String> = {
+		let player = world.players.get(name).unwrap();
+		players_in_scope(player, world, ViewScope::Room)
+			.into_iter().filter(|n| n.as_str() != name).collect()
+	};
+
+	if let Some(player) = world.players.get_mut(name) {
+		player.room_id = new_room.to_string();
+	}
+
+	let new_room_players: Vec<String> = {
+		let player = world.players.get(name).unwrap();
+		players_in_scope(player, world, ViewScope::Room)
+			.into_iter().filter(|n| n.as_str() != name).collect()
+	};
+
+	vec![
+		(old_room_players, format!("EVT ROOM PRESENCE LEAVE {}\n", name)),
+		(new_room_players, format!("EVT ROOM PRESENCE ENTER {}\n", name))
+	]
+}
+
+fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Vec<Event>) {
+	let (npc_id, room_id, power) = match world.players.get(name) {
+		Some(player) => match &player.combat_target {
+			Some(target) => (target.clone(), player.room_id.clone(), player.power),
+			None => return ("ERR NOT_IN_COMBAT\n".to_string(), Vec::new())
+		},
+		None => return ("ERR not_connected\n".to_string(), Vec::new())
+	};
+
+	let npc_name = match world.npcs.get(&npc_id) {
+		Some(npc) => npc.name.clone(),
+		None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+	};
+
+	let npc_in_room = match world.rooms.get(&room_id) {
+		Some(room) => room.npcs.contains(&npc_id),
+		None => false
+	};
+	if !npc_in_room {
+		if let Some(player) = world.players.get_mut(name) {
+			player.combat_target = None;
+		}
+		return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new());
+	}
+
+	let recipients = {
+		let player = world.players.get(name).unwrap();
+		players_in_scope(player, world, ViewScope::Room)
+	};
+
+	let action_str = match action {
+		CombatAction::Attack => "attack",
+		CombatAction::Defend => "defend",
+		CombatAction::Flee => "flee"
+	};
+
+	let mut player_damages = 0;
+	let mut npc_damages = NPC_POWER;
+	let mut status = "combat";
+
+	match action {
+		CombatAction::Attack => {
+			let npc = world.npcs.get_mut(&npc_id).unwrap();
+			npc.hp -= power;
+			player_damages = power;
+			if npc.hp <= 0 {
+				world.rooms.get_mut(&room_id).unwrap().npcs.remove(&npc_id);
+				if let Some(player) = world.players.get_mut(name) {
+					player.combat_target = None;
+				}
+				let mut events = vec![(recipients, format!("EVT ROOM COMBAT {} defeated {}\n", name, npc_name))];
+				events.extend(advance_quests(world, name, Trigger::Defeat(&npc_id)));
+				let attacker_hp = world.players.get(name).unwrap().hp;
+				let response = format!(
+					"OK {{\"action\": \"{}\", \"target\": \"{}\", \"player_damages\": {}, \"npc_damages\": 0, \"attacker_hp\": {}, \"target_hp\": 0, \"status\": \"victory\"}}\n",
+					action_str, npc_id, player_damages, attacker_hp
+				);
+				return (response, events);
+			}
+		}
+		CombatAction::Defend => {
+			npc_damages = NPC_POWER / 2;
+		}
+		CombatAction::Flee => {
+			if let Some(player) = world.players.get_mut(name) {
+				player.combat_target = None;
+			}
+			status = "fled";
+		}
+	}
+
+	let mut died = false;
+	if let Some(player) = world.players.get_mut(name) {
+		player.hp -= npc_damages;
+		died = player.hp <= 0;
+	}
+
+	let mut move_events: Vec<Event> = Vec::new();
+	if died {
+		status = "defeated";
+		move_events = move_player(world, name, "square");
+		if let Some(player) = world.players.get_mut(name) {
+			player.hp = 50;
+			player.combat_target = None;
+		}
+	}
+
+	let attacker_hp = world.players.get(name).unwrap().hp;
+	let target_hp = world.npcs.get(&npc_id).unwrap().hp;
+
+	let response = format!(
+		"OK {{\"action\": \"{}\", \"target\": \"{}\", \"player_damages\": {}, \"npc_damages\": {}, \"attacker_hp\": {}, \"target_hp\": {}, \"status\": \"{}\"}}\n",
+		action_str, npc_id, player_damages, npc_damages, attacker_hp, target_hp, status
+	);
+
+	let combat_line = if died {
+		format!("EVT ROOM COMBAT {} defeated by {}\n", name, npc_name)
+	} else {
+		format!("EVT ROOM COMBAT {} {} {}\n", name, action_str, npc_name)
+	};
+	let mut events = vec![(recipients, combat_line)];
+	events.extend(move_events);
+	(response, events)
+}
+
+
 fn handle_command(
     line: &str,
     player_name: &mut Option<String>,
-    world: &SharedWorld,
+    world: &SharedWorld
 ) -> (String, Vec<Event>) {
     let trimmed = line.trim();
     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
@@ -341,12 +497,14 @@ fn handle_command(
                 room_id: "square".to_string(),
 				group_id: None,
 				invites: Vec::new(),
-                hp: 100,
                 max_hp: 100,
+                hp: 100,
+				power: 10,
                 inventory: Vec::new(),
                 active_quests: HashMap::new(),
                 completed_quests: HashSet::new(),
                 statuses: Vec::new(),
+				combat_target: None
             };
 			let player_clone: Player = player.clone();
             w.players.insert(name.to_string(), player);
@@ -415,31 +573,11 @@ fn handle_command(
                     .cloned();
 
                 if let Some(next) = next_room_id {
-                    let leavers: Vec<String> = {
-                        let me = w.players.get(name).unwrap();
-                        players_in_scope(me, &w, ViewScope::Room)
-                            .into_iter().filter(|n| n.as_str() != name.as_str()).collect()
-                    };
-
-                    if let Some(p) = w.players.get_mut(name) {
-                        p.room_id = next.clone();
-                    }
-
-                    let enterers: Vec<String> = {
-                        let me = w.players.get(name).unwrap();
-                        players_in_scope(me, &w, ViewScope::Room)
-                            .into_iter().filter(|n| n.as_str() != name.as_str()).collect()
-                    };
-
-                    let res = format!("OK room={}\n", next);
-                    let mut events: Vec<Event> = vec![
-                        (leavers, format!("EVT ROOM PRESENCE LEAVE {}\n", name)),
-                        (enterers, format!("EVT ROOM PRESENCE ENTER {}\n", name)),
-                    ];
+                    let mut events = move_player(&mut w, name, &next);
                     events.extend(advance_quests(&mut w, name, Trigger::Reach));
-                    (res, events)
+                    (format!("OK room={}\n", next), events)
                 } else {
-                    ("ERR no_exit\n".to_string(), Vec::new())
+                    ("ERR 301 NO_EXIT\n".to_string(), Vec::new())
                 }
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
@@ -524,15 +662,7 @@ fn handle_command(
                 let mut w = world.lock().unwrap();
 
                 let room_id = w.players.get(name).unwrap().room_id.clone();
-                let room = w.rooms.get(&room_id).unwrap();
-
-                let target_npc_id = room.npcs.iter().find(|id| {
-                    if **id == npc_query { return true; }
-                    if let Some(n) = w.npcs.get(*id) {
-                        if n.name.eq_ignore_ascii_case(npc_query) { return true; }
-                    }
-                    false
-                }).cloned();
+                let target_npc_id = find_npc(&w, &room_id, npc_query);
 
                 if let Some(id) = target_npc_id {
                     let npc_data = w.npcs.get(&id).unwrap();
@@ -559,63 +689,47 @@ fn handle_command(
                 let mut w = world.lock().unwrap();
 
                 let room_id = w.players.get(name).unwrap().room_id.clone();
+                let target_npc_id = find_npc(&w, &room_id, npc_query);
 
-                let target_npc_id = w.rooms.get(&room_id).unwrap().npcs.iter().find(|id| {
-                    if **id == npc_query { return true; }
-                    if let Some(n) = w.npcs.get(*id) {
-                        if n.name.eq_ignore_ascii_case(npc_query) { return true; }
-                    }
-                    false
-                }).cloned();
+                let npc_id = match target_npc_id {
+                    Some(id) => id,
+                    None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+                };
 
-                if let Some(id) = target_npc_id {
-                    let mut npc_hp = w.npcs.get(&id).unwrap().hp;
-                    let npc_type = w.npcs.get(&id).unwrap().npc_type.clone();
-                    let npc_name = w.npcs.get(&id).unwrap().name.clone();
-
-                    npc_hp -= 25;
-                    w.npcs.get_mut(&id).unwrap().hp = npc_hp;
-
-                    let mut log_msg = format!("Tu attaques {} ! Ses HP descendent à {}.", npc_name, npc_hp);
-
-                    if npc_hp <= 0 {
-                        w.rooms.get_mut(&room_id).unwrap().npcs.remove(&id);
-                        log_msg.push_str(" Le monstre est mort !");
-                        let events = advance_quests(&mut w, name, Trigger::Defeat(&id));
-                        return (format!("OK combat=\"{}\"\n", log_msg), events);
-                    }
-
-                    if npc_type == "enemy" {
-                        let mut player_died = false;
-                        let mut dropped_items = Vec::new();
-
-                        if let Some(player) = w.players.get_mut(name) {
-                            player.hp -= 15;
-                            log_msg.push_str(&format!(" {} contre-attaque et t'inflige 15 dégâts !", npc_name));
-
-                            if player.hp <= 0 {
-                                player_died = true;
-                                log_msg.push_str(" Tu es mort ! Tu réapparais sur la place du village et ton inventaire tombe au sol.");
-                                dropped_items = std::mem::take(&mut player.inventory);
-
-                                player.hp = 100;
-                                player.room_id = "square".to_string();
-                            }
-                        }
-
-                        if player_died {
-                            if let Some(room) = w.rooms.get_mut(&room_id) {
-                                for item_id in dropped_items {
-                                    room.items.insert(item_id);
-                                }
-                            }
-                        }
-                    }
-
-                    (format!("OK combat=\"{}\"\n", log_msg), Vec::new())
-                } else {
-                    ("ERR target_not_found\n".to_string(), Vec::new())
+                if w.npcs.get(&npc_id).unwrap().npc_type != "enemy" {
+                    return ("ERR 405 NPC_NOT_HOSTILE\n".to_string(), Vec::new());
                 }
+
+                w.players.get_mut(name).unwrap().combat_target = Some(npc_id);
+
+                play_turn(&mut w, name, CombatAction::Attack)
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["ATTACK"] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+                play_turn(&mut w, name, CombatAction::Attack)
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["DEFEND"] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+                play_turn(&mut w, name, CombatAction::Defend)
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["FLEE"] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+                play_turn(&mut w, name, CombatAction::Flee)
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
@@ -623,17 +737,16 @@ fn handle_command(
 
 		_ if trimmed.starts_with("QUEST ") => {
             if let Some(name) = player_name {
-                let npc_id = trimmed["QUEST ".len()..].trim();
+                let npc_query = trimmed["QUEST ".len()..].trim();
                 let mut w = world.lock().unwrap();
-				let player = w.players.get(name).unwrap();
-				
-				if  w.npcs.get(npc_id).is_none() {
-					return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
-				}
-				if !w.rooms.get(&player.room_id).unwrap().npcs.contains(npc_id) {
-					return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
-				}
 
+                let room_id = w.players.get(name).unwrap().room_id.clone();
+                let npc_id = match find_npc(&w, &room_id, npc_query) {
+                    Some(id) => id,
+                    None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+                };
+
+                let player = w.players.get(name).unwrap();
                 let mut found_quest: Option<String> = None;
                 for (quest_id, quest) in &w.quests {
                     if quest.giver == npc_id
