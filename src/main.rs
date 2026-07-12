@@ -428,10 +428,15 @@ fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Ve
 				let mut events = vec![(recipients, format!("EVT ROOM COMBAT {} defeated {}\n", name, npc_name))];
 				events.extend(advance_quests(world, name, Trigger::Defeat(&npc_id)));
 				let attacker_hp = world.players.get(name).unwrap().hp;
-				let response = format!(
-					"OK {{\"action\": \"{}\", \"target\": \"{}\", \"player_damages\": {}, \"npc_damages\": 0, \"attacker_hp\": {}, \"target_hp\": 0, \"status\": \"victory\"}}\n",
-					action_str, npc_id, player_damages, attacker_hp
-				);
+				let response = format!("OK {}\n", serde_json::json!({
+					"action": action_str,
+					"target": npc_id,
+					"player_damages": player_damages,
+					"npc_damages": 0,
+					"attacker_hp": attacker_hp,
+					"target_hp": 0,
+					"status": "victory"
+				}));
 				return (response, events);
 			}
 		}
@@ -448,8 +453,13 @@ fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Ve
 
 	let mut died = false;
 	if let Some(player) = world.players.get_mut(name) {
-		player.hp -= npc_damages;
+		let poison_damages = if player.statuses.contains(&Status::Poison) { 5 } else { 0 };
+		player.hp -= npc_damages + poison_damages;
 		died = player.hp <= 0;
+		if !died && npc_id == "goblin" && !player.statuses.contains(&Status::Poison)
+			&& rand::random::<f64>() < 0.2 {
+			player.statuses.push(Status::Poison);
+		}
 	}
 
 	let mut move_events: Vec<Event> = Vec::new();
@@ -459,16 +469,22 @@ fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Ve
 		if let Some(player) = world.players.get_mut(name) {
 			player.hp = 50;
 			player.combat_target = None;
+			player.statuses.clear();
 		}
 	}
 
 	let attacker_hp = world.players.get(name).unwrap().hp;
 	let target_hp = world.npcs.get(&npc_id).unwrap().hp;
 
-	let response = format!(
-		"OK {{\"action\": \"{}\", \"target\": \"{}\", \"player_damages\": {}, \"npc_damages\": {}, \"attacker_hp\": {}, \"target_hp\": {}, \"status\": \"{}\"}}\n",
-		action_str, npc_id, player_damages, npc_damages, attacker_hp, target_hp, status
-	);
+	let response = format!("OK {}\n", serde_json::json!({
+		"action": action_str,
+		"target": npc_id,
+		"player_damages": player_damages,
+		"npc_damages": npc_damages,
+		"attacker_hp": attacker_hp,
+		"target_hp": target_hp,
+		"status": status
+	}));
 
 	let combat_line = if died {
 		format!("EVT ROOM COMBAT {} defeated by {}\n", name, npc_name)
@@ -487,11 +503,17 @@ fn handle_command(
     world: &SharedWorld
 ) -> (String, Vec<Event>) {
     let trimmed = line.trim();
+    if trimmed.chars().any(char::is_control) {
+        return ("ERR CONTROL_CHARS\n".to_string(), Vec::new());
+    }
     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
 
     match parts.as_slice() {
         ["CONNECT", name] => {
             let mut w = world.lock().unwrap();
+            if w.players.contains_key(*name) {
+                return ("ERR 201 NAME_IN_USE\n".to_string(), Vec::new());
+            }
             let player = Player {
                 name: name.to_string(),
                 room_id: "square".to_string(),
@@ -536,17 +558,16 @@ fn handle_command(
                                 && !player.active_quests.contains_key(quest_id)))
                             .collect();
 
-                        let res = format!(
-                            "OK {{\"room\": \"{}\", \"desc\": \"{}\", \"exits\": {:?}, \"players\": {:?}, \"items\": {:?}, \"npcs\": {:?}, \"available_quests\": {:?}, \"your_hp\": {}}}\n",
-                            room.name,
-                            room.description,
-                            room.exits.keys().collect::<Vec<_>>(),
-                            players_here,
-                            room.items.iter().collect::<Vec<_>>(),
-                            room.npcs.iter().collect::<Vec<_>>(),
-                            quest_givers,
-                            player.hp
-                        );
+                        let res = format!("OK {}\n", serde_json::json!({
+                            "room": room.name,
+                            "desc": room.description,
+                            "exits": room.exits.keys().collect::<Vec<_>>(),
+                            "players": players_here,
+                            "items": room.items.iter().collect::<Vec<_>>(),
+                            "npcs": room.npcs.iter().collect::<Vec<_>>(),
+                            "available_quests": quest_givers,
+                            "your_hp": player.hp
+                        }));
                         (res, Vec::new())
                     } else {
                         ("ERR room_not_found\n".to_string(), Vec::new())
@@ -650,7 +671,7 @@ fn handle_command(
             if let Some(name) = player_name {
                 let w = world.lock().unwrap();
                 let player = w.players.get(name).unwrap();
-                (format!("OK {:?}\n", player.inventory), Vec::new())
+                (format!("OK {}\n", serde_json::json!(player.inventory)), Vec::new())
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
@@ -763,10 +784,12 @@ fn handle_command(
                 };
 
                 let quest = w.quests.get(&quest_id).unwrap();
-                let response = format!(
-                    "OK {{\"quest_id\": \"{}\", \"description\": \"{}\", \"reward\": \"{}\", \"status\": \"{}\"}}\n",
-                    quest_id, quest.description, quest.reward, "received"
-                );
+                let response = format!("OK {}\n", serde_json::json!({
+                    "quest_id": quest_id,
+                    "description": quest.description,
+                    "reward": quest.reward,
+                    "status": "received"
+                }));
 				w.players.get_mut(name).unwrap().active_quests.insert(quest_id.clone(), 0);
                 (response, Vec::new())
             } else {
@@ -779,7 +802,7 @@ fn handle_command(
                 let w = world.lock().unwrap();
                 let player = w.players.get(name).unwrap();
 
-                let mut quests_strs: Vec<String> = Vec::new();
+                let mut quests_json: Vec<serde_json::Value> = Vec::new();
                 for (quest_id, step) in &player.active_quests {
                     let quest = match w.quests.get(quest_id) {
                         Some(q) => q,
@@ -790,19 +813,21 @@ fn handle_command(
 						Some(qs) => qs.description.as_str(),
 						None => ""
 					};
-                    quests_strs.push(format!(
-                        "{{\"quest_id\": \"{}\", \"status\": \"active\", \"progress\": \"{}/{}\", \"task\": \"{}\"}}",
-                        quest_id, step, total, task
-                    ));
+                    quests_json.push(serde_json::json!({
+                        "quest_id": quest_id,
+                        "status": "active",
+                        "progress": format!("{}/{}", step, total),
+                        "task": task
+                    }));
                 }
                 for quest_id in &player.completed_quests {
-                    quests_strs.push(format!(
-                        "{{\"quest_id\": \"{}\", \"status\": \"completed\"}}",
-                        quest_id
-                    ));
+                    quests_json.push(serde_json::json!({
+                        "quest_id": quest_id,
+                        "status": "completed"
+                    }));
                 }
 
-                (format!("OK [{}]\n", quests_strs.join(", ")), Vec::new())
+                (format!("OK {}\n", serde_json::json!(quests_json)), Vec::new())
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
@@ -838,11 +863,10 @@ fn handle_command(
         ["WHO"] => {
             let w = world.lock().unwrap();
             let names: Vec<&String> = w.players.keys().collect();
-            let res = format!(
-                "OK {{\"server\": {}, \"players\": {:?}}}\n",
-                names.len(),
-                names
-            );
+            let res = format!("OK {}\n", serde_json::json!({
+                "server": names.len(),
+                "players": names
+            }));
             (res, Vec::new())
         }
 
@@ -858,12 +882,11 @@ fn handle_command(
 					str_statuses.join(", ")
 				};
 
-				let res = format!(
-					"OK {{\"hp\": {}, \"max_hp\": {}, \"status\": \"{}\"}}\n",
-					player.hp,
-					player.max_hp,
-					status
-				);
+				let res = format!("OK {}\n", serde_json::json!({
+					"hp": player.hp,
+					"max_hp": player.max_hp,
+					"status": status
+				}));
 				(res, Vec::new())
 			} else {
                 ("ERR not_connected\n".to_string(), Vec::new())
