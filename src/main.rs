@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
+use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio_stream::StreamExt;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc};
+use tokio::sync::{mpsc, Semaphore};
 use serde::Deserialize;
 
 
@@ -1015,12 +1017,23 @@ async fn main() {
 
     let world: SharedWorld = Arc::new(Mutex::new(world_data));
 	let mailboxes: Mailboxes = Arc::new(Mutex::new(HashMap::new()));
+    let limiter = Arc::new(Semaphore::new(2));
 
     let listener = TcpListener::bind("0.0.0.0:4242").await.unwrap();
     println!("Server listening on port 4242");
 
     loop {
-        let (socket, addr) = listener.accept().await.unwrap();
+        let (mut socket, addr) = listener.accept().await.unwrap();
+
+        let permit = match limiter.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                println!("Connection refused (server full): {}", addr);
+                let _ = socket.write_all(b"ERR 503 SERVER_FULL\n").await;
+                continue;
+            }
+        };
+
         println!("New connection from {}", addr);
 
         let world_clone = Arc::clone(&world);
@@ -1028,6 +1041,7 @@ async fn main() {
 
         tokio::spawn(async move {
             handle_client(socket, addr, world_clone, boxes_clone).await;
+            drop(permit);
         });
     }
 }
@@ -1039,32 +1053,45 @@ async fn handle_client(
 	mailboxes: Mailboxes
 ) {
     let (reader, mut writer) = socket.into_split();
-    let mut reader = BufReader::new(reader);
+    let mut lines = FramedRead::new(reader, LinesCodec::new_with_max_length(1024));
 	let (mailbox_tx, mut mailbox_rx) = mpsc::unbounded_channel::<String>();
 
-    let mut line = String::new();
     let mut player_name: Option<String> = None;
+    let mut tokens: f64 = 10.0;
+    let mut last_refill = std::time::Instant::now();
 
     if let Err(_) = writer.write_all(b"OK hello proto=1\n").await {
         return;
     }
 
     loop {
-        line.clear();
-
         tokio::select! {
-            result = reader.read_line(&mut line) => {
-                match result {
-                    Ok(0) | Err(_) => {
+            next_line = lines.next() => {
+                match next_line {
+                    None => {
                         handle_disconnect(&player_name, &world, &mailboxes).await;
                         break;
                     }
-                    Ok(_) => {
+                    Some(Err(_)) => {
+                        let _ = writer.write_all(b"ERR 400 LINE_TOO_LONG\n").await;
+                        handle_disconnect(&player_name, &world, &mailboxes).await;
+                        break;
+                    }
+                    Some(Ok(line)) => {
                         if line.trim() == "QUIT" {
                             let _ = writer.write_all(b"OK bye\n").await;
                             handle_disconnect(&player_name, &world, &mailboxes).await;
                             break;
                         }
+
+                        let now = std::time::Instant::now();
+                        tokens = (tokens + now.duration_since(last_refill).as_secs_f64() * 5.0).min(10.0);
+                        last_refill = now;
+                        if tokens < 1.0 {
+                            let _ = writer.write_all(b"ERR RATE_LIMITED\n").await;
+                            continue;
+                        }
+                        tokens -= 1.0;
 
 						let was_connected = player_name.is_some();
                         let (response, event) = handle_command(&line, &mut player_name, &world);
