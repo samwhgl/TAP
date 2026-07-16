@@ -46,7 +46,6 @@ impl Status {
 
 #[derive(Clone)]
 struct Player {
-    name: String,
     room_id: String,
     group_id: Option<String>,
     invites: Vec<String>,
@@ -63,7 +62,6 @@ struct Player {
 #[derive(Deserialize, Debug, Clone)]
 struct Item {
     name: String,
-    description: String,
     #[serde(default = "default_true")]
     obtainable: bool,
 }
@@ -75,7 +73,6 @@ fn default_true() -> bool {
 #[derive(Deserialize, Debug, Clone)]
 struct Npc {
     name: String,
-    description: String,
     dialogue: Vec<String>,
     hp: i32,
     #[serde(default = "default_friendly")]
@@ -569,7 +566,7 @@ fn handle_command(
     player_name: &mut Option<String>,
     world: &SharedWorld,
 ) -> (String, Vec<Event>) {
-    let trimmed = line.trim();
+    let trimmed = line.trim_matches(char::is_control).trim();
     if trimmed.chars().any(char::is_control) {
         return ("ERR CONTROL_CHARS\n".to_string(), Vec::new());
     }
@@ -583,7 +580,6 @@ fn handle_command(
                 return (res, Vec::new());
             }
             let player = Player {
-                name: name.to_string(),
                 room_id: "square".to_string(),
                 group_id: None,
                 invites: Vec::new(),
@@ -1211,8 +1207,12 @@ async fn handle_client(
                         break;
                     }
                     Some(Ok(line)) => {
-                        log_cmd(player_name.clone().unwrap_or("Undefined".to_string()), line.clone(), LogLvl::INFO);
-                        if line.trim() == "QUIT" {
+                        let cleaned_line: String = line
+                            .chars()
+                            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+                            .collect();
+                        log_cmd(player_name.clone().unwrap_or("Undefined".to_string()), cleaned_line.clone(), LogLvl::INFO);
+                        if cleaned_line.trim() == "QUIT" {
                             let _ = writer.write_all(b"OK bye\n").await;
                             handle_disconnect(&player_name, &world, &mailboxes).await;
                             log_connection(addr, ConnectEvent::DISCONNECTION, LogLvl::INFO);
@@ -1229,7 +1229,7 @@ async fn handle_client(
                         tokens -= 1.0;
 
                         let was_connected = player_name.is_some();
-                        let (response, event) = handle_command(&line, &mut player_name, &world);
+                        let (response, event) = handle_command(&cleaned_line, &mut player_name, &world);
                         log_response(&response, player_name.clone().unwrap_or("Undefined".to_string()));
                         if !was_connected {
                             if let Some(name) = &player_name {
