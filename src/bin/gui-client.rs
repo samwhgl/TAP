@@ -4,7 +4,13 @@ use tokio::net::TcpStream;
 
 #[tokio::main]
 async fn main() -> eframe::Result {
-    let socket = TcpStream::connect("127.0.0.1:4242").await.unwrap();
+    let socket = match TcpStream::connect("127.0.0.1:4242").await {
+        Ok(s) => s,
+        Err(e) => {
+            println!("Connection error: {}", e);
+            std::process::exit(1)
+        }
+    };
     let (reader, mut writer) = socket.into_split();
     let mut socket_reader = BufReader::new(reader);
 
