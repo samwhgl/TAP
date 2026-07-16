@@ -7,6 +7,7 @@ use tokio_stream::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Semaphore};
 use serde::Deserialize;
+use tap_game::utils::*;
 
 
 const NPC_POWER: i32 = 15;
@@ -439,6 +440,7 @@ fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Ve
 					"target_hp": 0,
 					"status": "victory"
 				}));
+                log_npc_death(&npc_id, &room_id, &name);
 				return (response, events);
 			}
 		}
@@ -468,11 +470,14 @@ fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Ve
 	if died {
 		status = "defeated";
 		move_events = move_player(world, name, "square");
+        let cause = "combat";
+        log_player_death(&name, &room_id, &cause);
 		if let Some(player) = world.players.get_mut(name) {
 			player.hp = 50;
 			player.combat_target = None;
 			player.statuses.clear();
 		}
+        
 	}
 
 	let attacker_hp = world.players.get(name).unwrap().hp;
@@ -514,7 +519,8 @@ fn handle_command(
         ["CONNECT", name] => {
             let mut w = world.lock().unwrap();
             if w.players.contains_key(*name) {
-                return ("ERR 201 NAME_IN_USE\n".to_string(), Vec::new());
+                let res = "ERR 201 NAME_IN_USE\n".to_string();
+                return (res, Vec::new());
             }
             let player = Player {
                 name: name.to_string(),
@@ -631,7 +637,9 @@ fn handle_command(
                     w.players.get_mut(name).unwrap().inventory.push(id.clone());
 
                     let events = advance_quests(&mut w, name, Trigger::Collect);
+                    log_items(ItemEvent::TAKE, &id, &room_id, &name);
                     (format!("OK taken={}\n", id), events)
+
                 } else {
                     ("ERR item_not_found\n".to_string(), Vec::new())
                 }
@@ -660,6 +668,7 @@ fn handle_command(
 
                     w.rooms.get_mut(&room_id).unwrap().items.insert(id.clone());
 
+                    log_items(ItemEvent::DROP, &id, &room_id, &name);
                     (format!("OK dropped={}\n", id), Vec::new())
                 } else {
                     ("ERR item_not_in_inventory\n".to_string(), Vec::new())
@@ -1010,7 +1019,7 @@ async fn main() {
     let world_data = match World::from_file("world.yaml") {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("Erreur critique au démarrage du serveur : {}", e);
+            eprintln!("Critical Error while starting server : {}", e);
             std::process::exit(1);
         }
     };
@@ -1028,13 +1037,14 @@ async fn main() {
         let permit = match limiter.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
-                println!("Connection refused (server full): {}", addr);
+                log_connection(addr, ConnectEvent::REFUSED, LogLvl::WARN);
+                //println!("Connection refused (server full): {}", addr);
                 let _ = socket.write_all(b"ERR 503 SERVER_FULL\n").await;
                 continue;
             }
         };
 
-        println!("New connection from {}", addr);
+        log_connection(addr, ConnectEvent::CONNECTION, LogLvl::INFO);
 
         let world_clone = Arc::clone(&world);
 		let boxes_clone: Mailboxes = Arc::clone(&mailboxes);
@@ -1070,17 +1080,21 @@ async fn handle_client(
                 match next_line {
                     None => {
                         handle_disconnect(&player_name, &world, &mailboxes).await;
+                        log_connection(addr, ConnectEvent::LOSTCONNECT, LogLvl::ERROR);
                         break;
                     }
                     Some(Err(_)) => {
                         let _ = writer.write_all(b"ERR 400 LINE_TOO_LONG\n").await;
                         handle_disconnect(&player_name, &world, &mailboxes).await;
+                        log_connection(addr, ConnectEvent::LOSTCONNECT, LogLvl::ERROR);
                         break;
                     }
                     Some(Ok(line)) => {
+                        log_cmd(player_name.clone().unwrap_or("Undefined".to_string()), line.clone(), LogLvl::INFO);
                         if line.trim() == "QUIT" {
                             let _ = writer.write_all(b"OK bye\n").await;
                             handle_disconnect(&player_name, &world, &mailboxes).await;
+                            log_connection(addr, ConnectEvent::DISCONNECTION, LogLvl::INFO);
                             break;
                         }
 
@@ -1095,6 +1109,7 @@ async fn handle_client(
 
 						let was_connected = player_name.is_some();
                         let (response, event) = handle_command(&line, &mut player_name, &world);
+                        log_response(&response, player_name.clone().unwrap_or("Undefined".to_string()));
 						if !was_connected {
 							if let Some(name) = &player_name {
 								mailboxes.lock().unwrap().insert(name.clone(), mailbox_tx.clone());
@@ -1130,8 +1145,6 @@ async fn handle_client(
             }
         }
     }
-
-    println!("Connection closed: {}", addr);
 }
 
 async fn handle_disconnect(
@@ -1163,6 +1176,5 @@ async fn handle_disconnect(
 				}
             }
         }
-        println!("Player {} disconnected", name);
     }
 }

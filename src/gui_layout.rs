@@ -134,7 +134,7 @@ impl GuiWindow {
             ("QUEST ...", ButtonAction::Fill),
             ("QUESTS", ButtonAction::ImmediateSend),
             ("ATTACK ...", ButtonAction::Fill),
-            ("GROUP CREATE ...", ButtonAction::Fill),
+            ("GROUP CREATE", ButtonAction::ImmediateSend),
             ("GROUP INVITE ...", ButtonAction::Fill),
             ("GROUP JOIN ...", ButtonAction::Fill),
             ("GROUP LEAVE ...", ButtonAction::Fill),
