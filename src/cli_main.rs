@@ -9,7 +9,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = match TcpStream::connect("127.0.0.1:4242").await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Erreur : Impossible de se connecter au serveur. Vérifie qu'il est bien lancé !");
+            eprintln!(
+                "Erreur : Impossible de se connecter au serveur. Vérifie qu'il est bien lancé !"
+            );
             return Err(e.into());
         }
     };

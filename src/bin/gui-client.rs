@@ -1,6 +1,6 @@
-use tokio::net::TcpStream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tap_game::gui_layout::GuiWindow;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 
 #[tokio::main]
 async fn main() -> eframe::Result {
@@ -12,7 +12,7 @@ async fn main() -> eframe::Result {
     let (tx_to_gui, rx_from_server) = std::sync::mpsc::channel::<String>();
 
     tokio::spawn(async move {
-        loop{
+        loop {
             tokio::select! {
                 msg_from_gui =  rx_from_gui.recv() => {
                     if let Some(msg) = msg_from_gui {
@@ -61,8 +61,6 @@ async fn main() -> eframe::Result {
     eframe::run_native(
         "The Answer Protocol",
         native_option,
-        Box::new(|cc| {
-            Ok(Box::new(GuiWindow::new(cc, tx_to_server, rx_from_server)))
-        }),
+        Box::new(|cc| Ok(Box::new(GuiWindow::new(cc, tx_to_server, rx_from_server)))),
     )
 }

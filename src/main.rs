@@ -1,49 +1,47 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::fs::File;
-use tokio::io::AsyncWriteExt;
-use tokio_util::codec::{FramedRead, LinesCodec};
-use tokio_stream::StreamExt;
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Semaphore};
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::sync::{Arc, Mutex};
 use tap_game::utils::*;
-
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::sync::{Semaphore, mpsc};
+use tokio_stream::StreamExt;
+use tokio_util::codec::{FramedRead, LinesCodec};
 
 const NPC_POWER: i32 = 15;
 
-
 enum ViewScope {
-	Global,
-	Room,
-	Group
+    Global,
+    Room,
+    Group,
 }
 
 enum Trigger<'npc> {
-	Reach,
-	Collect,
-	Defeat(&'npc str),
-	Talk(&'npc str)
+    Reach,
+    Collect,
+    Defeat(&'npc str),
+    Talk(&'npc str),
 }
 
 #[derive(Clone, Copy)]
 enum CombatAction {
-	Attack,
-	Defend,
-	Flee
+    Attack,
+    Defend,
+    Flee,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum Status {
-	Poison
+    Poison,
 }
 
 impl Status {
-	fn as_str(&self) -> &str {
-		match self {
-			Status::Poison => "poisoned",
-		}
-	}
+    fn as_str(&self) -> &str {
+        match self {
+            Status::Poison => "poisoned",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -51,15 +49,15 @@ struct Player {
     name: String,
     room_id: String,
     group_id: Option<String>,
-	invites: Vec<String>,
+    invites: Vec<String>,
     max_hp: i32,
     hp: i32,
-	power: i32,
+    power: i32,
     inventory: Vec<String>,
     active_quests: HashMap<String, usize>,
     completed_quests: HashSet<String>,
     statuses: Vec<Status>,
-	combat_target: Option<String>
+    combat_target: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -67,10 +65,12 @@ struct Item {
     name: String,
     description: String,
     #[serde(default = "default_true")]
-    obtainable: bool
+    obtainable: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Deserialize, Debug, Clone)]
 struct Npc {
@@ -79,10 +79,12 @@ struct Npc {
     dialogue: Vec<String>,
     hp: i32,
     #[serde(default = "default_friendly")]
-    npc_type: String
+    npc_type: String,
 }
 
-fn default_friendly() -> String { "friendly".to_string() }
+fn default_friendly() -> String {
+    "friendly".to_string()
+}
 
 #[derive(Deserialize, Debug, Clone)]
 struct Room {
@@ -92,24 +94,36 @@ struct Room {
     #[serde(default)]
     items: HashSet<String>,
     #[serde(default)]
-    npcs: HashSet<String>
+    npcs: HashSet<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 enum StepKind {
-    Reach { room: String },
-    Collect { item: String, #[serde(default = "default_count")] count: u32 },
-    Talk { npc: String },
-    Defeat { npc: String }
+    Reach {
+        room: String,
+    },
+    Collect {
+        item: String,
+        #[serde(default = "default_count")]
+        count: u32,
+    },
+    Talk {
+        npc: String,
+    },
+    Defeat {
+        npc: String,
+    },
 }
 
-fn default_count() -> u32 { 1 }
+fn default_count() -> u32 {
+    1
+}
 
 #[derive(Deserialize, Debug, Clone)]
 struct QuestStep {
     description: String,
-    kind: StepKind
+    kind: StepKind,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -117,7 +131,7 @@ struct Quest {
     giver: String,
     description: String,
     steps: Vec<QuestStep>,
-    reward: String
+    reward: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -128,7 +142,7 @@ struct WorldConfig {
     #[serde(default)]
     npcs: HashMap<String, Npc>,
     #[serde(default)]
-    quests: HashMap<String, Quest>
+    quests: HashMap<String, Quest>,
 }
 
 struct World {
@@ -136,7 +150,7 @@ struct World {
     rooms: HashMap<String, Room>,
     items: HashMap<String, Item>,
     npcs: HashMap<String, Npc>,
-    quests: HashMap<String, Quest>
+    quests: HashMap<String, Quest>,
 }
 
 impl World {
@@ -176,32 +190,40 @@ impl World {
                 return Err(format!(
                     "Validation Error: La quête '{}' a un giver '{}' inexistant !",
                     quest_id, quest.giver
-                ).into());
+                )
+                .into());
             }
             if !config.items.contains_key(&quest.reward) {
                 return Err(format!(
                     "Validation Error: La quête '{}' a une récompense '{}' inexistante !",
                     quest_id, quest.reward
-                ).into());
+                )
+                .into());
             }
             for step in &quest.steps {
                 let (exists, target) = match &step.kind {
                     StepKind::Reach { room } => (config.rooms.contains_key(room), room),
                     StepKind::Collect { item, .. } => (config.items.contains_key(item), item),
-                    StepKind::Talk { npc } | StepKind::Defeat { npc } => (config.npcs.contains_key(npc), npc),
+                    StepKind::Talk { npc } | StepKind::Defeat { npc } => {
+                        (config.npcs.contains_key(npc), npc)
+                    }
                 };
                 if !exists {
                     return Err(format!(
                         "Validation Error: La quête '{}' référence une cible '{}' inexistante !",
                         quest_id, target
-                    ).into());
+                    )
+                    .into());
                 }
             }
         }
 
         println!(
             "Monde validé ! {} pièces, {} objets, {} NPCs et {} quêtes chargés.",
-            config.rooms.len(), config.items.len(), config.npcs.len(), config.quests.len()
+            config.rooms.len(),
+            config.items.len(),
+            config.npcs.len(),
+            config.quests.len()
         );
 
         Ok(World {
@@ -214,300 +236,338 @@ impl World {
     }
 }
 
-
 type Event = (Vec<String>, String);
 type SharedWorld = Arc<Mutex<World>>;
 type Mailboxes = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>;
 
-
-fn players_in_scope(
-	player: &Player,
-	world: &World,
-	scope: ViewScope
-) -> Vec<String> {
-	match scope {
-		ViewScope::Global => world.players.keys().cloned().collect(),
-		ViewScope::Room => {
-			world.players
-				.iter()
-				.filter(|(_, p)| p.room_id == player.room_id)
-				.map(|(name, _)| name.clone()).collect()
-		},
-		ViewScope::Group => match &player.group_id {
-			Some(_) => world.players
-				.iter()
-				.filter(|(_, p)| p.group_id == player.group_id)
-				.map(|(name, _)| name.clone()).collect(),
-			None => Vec::new()
-		}
-	}
+fn players_in_scope(player: &Player, world: &World, scope: ViewScope) -> Vec<String> {
+    match scope {
+        ViewScope::Global => world.players.keys().cloned().collect(),
+        ViewScope::Room => world
+            .players
+            .iter()
+            .filter(|(_, p)| p.room_id == player.room_id)
+            .map(|(name, _)| name.clone())
+            .collect(),
+        ViewScope::Group => match &player.group_id {
+            Some(_) => world
+                .players
+                .iter()
+                .filter(|(_, p)| p.group_id == player.group_id)
+                .map(|(name, _)| name.clone())
+                .collect(),
+            None => Vec::new(),
+        },
+    }
 }
-
 
 fn find_npc(world: &World, room_id: &str, query: &str) -> Option<String> {
-	let room = match world.rooms.get(room_id) {
-		Some(r) => r,
-		None => return None
-	};
-	room.npcs.iter().find(|id| {
-		if id.as_str() == query { return true; }
-		if let Some(npc) = world.npcs.get(*id) {
-			if npc.name == query { return true; }
-		}
-		false
-	}).cloned()
+    let room = match world.rooms.get(room_id) {
+        Some(r) => r,
+        None => return None,
+    };
+    room.npcs
+        .iter()
+        .find(|id| {
+            if id.as_str() == query {
+                return true;
+            }
+            if let Some(npc) = world.npcs.get(*id) {
+                if npc.name == query {
+                    return true;
+                }
+            }
+            false
+        })
+        .cloned()
 }
-
 
 fn leave_group(world: &mut World, name: &str) -> Vec<Event> {
-	let Some(player) = world.players.get(name) else {
-		return Vec::new();
-	};
-	let Some(group_name) = player.group_id.clone() else {
-		return Vec::new();
-	};
+    let Some(player) = world.players.get(name) else {
+        return Vec::new();
+    };
+    let Some(group_name) = player.group_id.clone() else {
+        return Vec::new();
+    };
 
-	if name == group_name.as_str() {
-		let members: Vec<String> = world.players.iter()
-			.filter(|(_, p)| p.group_id.as_deref() == Some(group_name.as_str()))
-			.map(|(n, _)| n.clone())
-			.collect();
+    if name == group_name.as_str() {
+        let members: Vec<String> = world
+            .players
+            .iter()
+            .filter(|(_, p)| p.group_id.as_deref() == Some(group_name.as_str()))
+            .map(|(n, _)| n.clone())
+            .collect();
 
-		for member in &members {
-			if let Some(p) = world.players.get_mut(member) {
-				p.group_id = None;
-			}
-		}
+        for member in &members {
+            if let Some(p) = world.players.get_mut(member) {
+                p.group_id = None;
+            }
+        }
 
-		let recipients: Vec<String> = members.into_iter()
-			.filter(|n| n.as_str() != name).collect();
-		vec![(recipients, format!("EVT GROUP LEAVE {}\n", name))]
-	} else {
-		let recipients: Vec<String> = {
-			let player = world.players.get(name).unwrap();
-			players_in_scope(player, world, ViewScope::Group)
-				.into_iter().filter(|n| n.as_str() != name).collect()
-		};
+        let recipients: Vec<String> = members.into_iter().filter(|n| n.as_str() != name).collect();
+        vec![(recipients, format!("EVT GROUP LEAVE {}\n", name))]
+    } else {
+        let recipients: Vec<String> = {
+            let player = world.players.get(name).unwrap();
+            players_in_scope(player, world, ViewScope::Group)
+                .into_iter()
+                .filter(|n| n.as_str() != name)
+                .collect()
+        };
 
-		if let Some(p) = world.players.get_mut(name) {
-			p.group_id = None;
-		}
+        if let Some(p) = world.players.get_mut(name) {
+            p.group_id = None;
+        }
 
-		vec![(recipients, format!("EVT GROUP LEAVE {}\n", name))]
-	}
+        vec![(recipients, format!("EVT GROUP LEAVE {}\n", name))]
+    }
 }
-
 
 fn advance_quests(world: &mut World, name: &str, trigger: Trigger<'_>) -> Vec<Event> {
-	let mut events: Vec<Event> = Vec::new();
-	let active_quests: Vec<String> = match world.players.get(name) {
-		Some(player) => player.active_quests.keys().cloned().collect(),
-		None => return events
-	};
+    let mut events: Vec<Event> = Vec::new();
+    let active_quests: Vec<String> = match world.players.get(name) {
+        Some(player) => player.active_quests.keys().cloned().collect(),
+        None => return events,
+    };
 
-	for quest_id in active_quests {
-		let quest = match world.quests.get(&quest_id) {
-			Some(q) => q,
-			None => continue
-		};
+    for quest_id in active_quests {
+        let quest = match world.quests.get(&quest_id) {
+            Some(q) => q,
+            None => continue,
+        };
 
-		let step = match world.players.get(name).unwrap().active_quests.get(&quest_id) {
-			Some(s) => *s,
-			None => continue
-		};		
-		let total = quest.steps.len();
-		if step >= total {
-			continue;
-		}
+        let step = match world
+            .players
+            .get(name)
+            .unwrap()
+            .active_quests
+            .get(&quest_id)
+        {
+            Some(s) => *s,
+            None => continue,
+        };
+        let total = quest.steps.len();
+        if step >= total {
+            continue;
+        }
 
-		let kind = quest.steps[step].kind.clone();
-		let player = world.players.get(name).unwrap();
+        let kind = quest.steps[step].kind.clone();
+        let player = world.players.get(name).unwrap();
 
-		let satisfied = match (&trigger, &kind) {
-			(Trigger::Reach, StepKind::Reach { room }) => player.room_id == *room,
-			(Trigger::Collect, StepKind::Collect { item, count }) => {
-				player.inventory.iter().filter(|i| *i == item).count() as u32 >= *count
-			}
-			(Trigger::Defeat(killed), StepKind::Defeat { npc }) => *killed == npc.as_str(),
-			(Trigger::Talk(talked), StepKind::Talk { npc }) => *talked == npc.as_str(),
-			_ => false
-		};
-		if !satisfied {
-			continue;
-		}
+        let satisfied = match (&trigger, &kind) {
+            (Trigger::Reach, StepKind::Reach { room }) => player.room_id == *room,
+            (Trigger::Collect, StepKind::Collect { item, count }) => {
+                player.inventory.iter().filter(|i| *i == item).count() as u32 >= *count
+            }
+            (Trigger::Defeat(killed), StepKind::Defeat { npc }) => *killed == npc.as_str(),
+            (Trigger::Talk(talked), StepKind::Talk { npc }) => *talked == npc.as_str(),
+            _ => false,
+        };
+        if !satisfied {
+            continue;
+        }
 
-		let new_step = step + 1;
-		let reward = quest.reward.clone();
-		let player = world.players.get_mut(name).unwrap();
+        let new_step = step + 1;
+        let reward = quest.reward.clone();
+        let player = world.players.get_mut(name).unwrap();
 
-		if new_step >= total {
-			player.active_quests.remove(&quest_id);
-			player.completed_quests.insert(quest_id.clone());
-			player.inventory.push(reward);
-			events.push((vec![name.to_string()], format!("EVT QUEST COMPLETED {}\n", quest_id)));
-		} else {
-			player.active_quests.insert(quest_id.clone(), new_step);
-			events.push((vec![name.to_string()], format!("EVT QUEST PROGRESSED {} {}/{}\n", quest_id, new_step, total)));
-		}
-	}
+        if new_step >= total {
+            player.active_quests.remove(&quest_id);
+            player.completed_quests.insert(quest_id.clone());
+            player.inventory.push(reward);
+            events.push((
+                vec![name.to_string()],
+                format!("EVT QUEST COMPLETED {}\n", quest_id),
+            ));
+        } else {
+            player.active_quests.insert(quest_id.clone(), new_step);
+            events.push((
+                vec![name.to_string()],
+                format!("EVT QUEST PROGRESSED {} {}/{}\n", quest_id, new_step, total),
+            ));
+        }
+    }
 
-	events
+    events
 }
 
-
 fn move_player(world: &mut World, name: &str, new_room: &str) -> Vec<Event> {
-	let old_room_players: Vec<String> = {
-		let player = world.players.get(name).unwrap();
-		players_in_scope(player, world, ViewScope::Room)
-			.into_iter().filter(|n| n.as_str() != name).collect()
-	};
+    let old_room_players: Vec<String> = {
+        let player = world.players.get(name).unwrap();
+        players_in_scope(player, world, ViewScope::Room)
+            .into_iter()
+            .filter(|n| n.as_str() != name)
+            .collect()
+    };
 
-	if let Some(player) = world.players.get_mut(name) {
-		player.room_id = new_room.to_string();
-	}
+    if let Some(player) = world.players.get_mut(name) {
+        player.room_id = new_room.to_string();
+    }
 
-	let new_room_players: Vec<String> = {
-		let player = world.players.get(name).unwrap();
-		players_in_scope(player, world, ViewScope::Room)
-			.into_iter().filter(|n| n.as_str() != name).collect()
-	};
+    let new_room_players: Vec<String> = {
+        let player = world.players.get(name).unwrap();
+        players_in_scope(player, world, ViewScope::Room)
+            .into_iter()
+            .filter(|n| n.as_str() != name)
+            .collect()
+    };
 
-	vec![
-		(old_room_players, format!("EVT ROOM PRESENCE LEAVE {}\n", name)),
-		(new_room_players, format!("EVT ROOM PRESENCE ENTER {}\n", name))
-	]
+    vec![
+        (
+            old_room_players,
+            format!("EVT ROOM PRESENCE LEAVE {}\n", name),
+        ),
+        (
+            new_room_players,
+            format!("EVT ROOM PRESENCE ENTER {}\n", name),
+        ),
+    ]
 }
 
 fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Vec<Event>) {
-	let (npc_id, room_id, power) = match world.players.get(name) {
-		Some(player) => match &player.combat_target {
-			Some(target) => (target.clone(), player.room_id.clone(), player.power),
-			None => return ("ERR NOT_IN_COMBAT\n".to_string(), Vec::new())
-		},
-		None => return ("ERR not_connected\n".to_string(), Vec::new())
-	};
+    let (npc_id, room_id, power) = match world.players.get(name) {
+        Some(player) => match &player.combat_target {
+            Some(target) => (target.clone(), player.room_id.clone(), player.power),
+            None => return ("ERR NOT_IN_COMBAT\n".to_string(), Vec::new()),
+        },
+        None => return ("ERR not_connected\n".to_string(), Vec::new()),
+    };
 
-	let npc_name = match world.npcs.get(&npc_id) {
-		Some(npc) => npc.name.clone(),
-		None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
-	};
+    let npc_name = match world.npcs.get(&npc_id) {
+        Some(npc) => npc.name.clone(),
+        None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new()),
+    };
 
-	let npc_in_room = match world.rooms.get(&room_id) {
-		Some(room) => room.npcs.contains(&npc_id),
-		None => false
-	};
-	if !npc_in_room {
-		if let Some(player) = world.players.get_mut(name) {
-			player.combat_target = None;
-		}
-		return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new());
-	}
+    let npc_in_room = match world.rooms.get(&room_id) {
+        Some(room) => room.npcs.contains(&npc_id),
+        None => false,
+    };
+    if !npc_in_room {
+        if let Some(player) = world.players.get_mut(name) {
+            player.combat_target = None;
+        }
+        return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new());
+    }
 
-	let recipients = {
-		let player = world.players.get(name).unwrap();
-		players_in_scope(player, world, ViewScope::Room)
-	};
+    let recipients = {
+        let player = world.players.get(name).unwrap();
+        players_in_scope(player, world, ViewScope::Room)
+    };
 
-	let action_str = match action {
-		CombatAction::Attack => "attack",
-		CombatAction::Defend => "defend",
-		CombatAction::Flee => "flee"
-	};
+    let action_str = match action {
+        CombatAction::Attack => "attack",
+        CombatAction::Defend => "defend",
+        CombatAction::Flee => "flee",
+    };
 
-	let mut player_damages = 0;
-	let mut npc_damages = NPC_POWER;
-	let mut status = "combat";
+    let mut player_damages = 0;
+    let mut npc_damages = NPC_POWER;
+    let mut status = "combat";
 
-	match action {
-		CombatAction::Attack => {
-			let npc = world.npcs.get_mut(&npc_id).unwrap();
-			npc.hp -= power;
-			player_damages = power;
-			if npc.hp <= 0 {
-				world.rooms.get_mut(&room_id).unwrap().npcs.remove(&npc_id);
-				if let Some(player) = world.players.get_mut(name) {
-					player.combat_target = None;
-				}
-				let mut events = vec![(recipients, format!("EVT ROOM COMBAT {} defeated {}\n", name, npc_name))];
-				events.extend(advance_quests(world, name, Trigger::Defeat(&npc_id)));
-				let attacker_hp = world.players.get(name).unwrap().hp;
-				let response = format!("OK {}\n", serde_json::json!({
-					"action": action_str,
-					"target": npc_id,
-					"player_damages": player_damages,
-					"npc_damages": 0,
-					"attacker_hp": attacker_hp,
-					"target_hp": 0,
-					"status": "victory"
-				}));
+    match action {
+        CombatAction::Attack => {
+            let npc = world.npcs.get_mut(&npc_id).unwrap();
+            npc.hp -= power;
+            player_damages = power;
+            if npc.hp <= 0 {
+                world.rooms.get_mut(&room_id).unwrap().npcs.remove(&npc_id);
+                if let Some(player) = world.players.get_mut(name) {
+                    player.combat_target = None;
+                }
+                let mut events = vec![(
+                    recipients,
+                    format!("EVT ROOM COMBAT {} defeated {}\n", name, npc_name),
+                )];
+                events.extend(advance_quests(world, name, Trigger::Defeat(&npc_id)));
+                let attacker_hp = world.players.get(name).unwrap().hp;
+                let response = format!(
+                    "OK {}\n",
+                    serde_json::json!({
+                        "action": action_str,
+                        "target": npc_id,
+                        "player_damages": player_damages,
+                        "npc_damages": 0,
+                        "attacker_hp": attacker_hp,
+                        "target_hp": 0,
+                        "status": "victory"
+                    })
+                );
                 log_npc_death(&npc_id, &room_id, &name);
-				return (response, events);
-			}
-		}
-		CombatAction::Defend => {
-			npc_damages = NPC_POWER / 2;
-		}
-		CombatAction::Flee => {
-			if let Some(player) = world.players.get_mut(name) {
-				player.combat_target = None;
-			}
-			status = "fled";
-		}
-	}
+                return (response, events);
+            }
+        }
+        CombatAction::Defend => {
+            npc_damages = NPC_POWER / 2;
+        }
+        CombatAction::Flee => {
+            if let Some(player) = world.players.get_mut(name) {
+                player.combat_target = None;
+            }
+            status = "fled";
+        }
+    }
 
-	let mut died = false;
-	if let Some(player) = world.players.get_mut(name) {
-		let poison_damages = if player.statuses.contains(&Status::Poison) { 5 } else { 0 };
-		player.hp -= npc_damages + poison_damages;
-		died = player.hp <= 0;
-		if !died && npc_id == "goblin" && !player.statuses.contains(&Status::Poison)
-			&& rand::random::<f64>() < 0.2 {
-			player.statuses.push(Status::Poison);
-		}
-	}
+    let mut died = false;
+    if let Some(player) = world.players.get_mut(name) {
+        let poison_damages = if player.statuses.contains(&Status::Poison) {
+            5
+        } else {
+            0
+        };
+        player.hp -= npc_damages + poison_damages;
+        died = player.hp <= 0;
+        if !died
+            && npc_id == "goblin"
+            && !player.statuses.contains(&Status::Poison)
+            && rand::random::<f64>() < 0.2
+        {
+            player.statuses.push(Status::Poison);
+        }
+    }
 
-	let mut move_events: Vec<Event> = Vec::new();
-	if died {
-		status = "defeated";
-		move_events = move_player(world, name, "square");
+    let mut move_events: Vec<Event> = Vec::new();
+    if died {
+        status = "defeated";
+        move_events = move_player(world, name, "square");
         let cause = "combat";
         log_player_death(&name, &room_id, &cause);
-		if let Some(player) = world.players.get_mut(name) {
-			player.hp = 50;
-			player.combat_target = None;
-			player.statuses.clear();
-		}
-        
-	}
+        if let Some(player) = world.players.get_mut(name) {
+            player.hp = 50;
+            player.combat_target = None;
+            player.statuses.clear();
+        }
+    }
 
-	let attacker_hp = world.players.get(name).unwrap().hp;
-	let target_hp = world.npcs.get(&npc_id).unwrap().hp;
+    let attacker_hp = world.players.get(name).unwrap().hp;
+    let target_hp = world.npcs.get(&npc_id).unwrap().hp;
 
-	let response = format!("OK {}\n", serde_json::json!({
-		"action": action_str,
-		"target": npc_id,
-		"player_damages": player_damages,
-		"npc_damages": npc_damages,
-		"attacker_hp": attacker_hp,
-		"target_hp": target_hp,
-		"status": status
-	}));
+    let response = format!(
+        "OK {}\n",
+        serde_json::json!({
+            "action": action_str,
+            "target": npc_id,
+            "player_damages": player_damages,
+            "npc_damages": npc_damages,
+            "attacker_hp": attacker_hp,
+            "target_hp": target_hp,
+            "status": status
+        })
+    );
 
-	let combat_line = if died {
-		format!("EVT ROOM COMBAT {} defeated by {}\n", name, npc_name)
-	} else {
-		format!("EVT ROOM COMBAT {} {} {}\n", name, action_str, npc_name)
-	};
-	let mut events = vec![(recipients, combat_line)];
-	events.extend(move_events);
-	(response, events)
+    let combat_line = if died {
+        format!("EVT ROOM COMBAT {} defeated by {}\n", name, npc_name)
+    } else {
+        format!("EVT ROOM COMBAT {} {} {}\n", name, action_str, npc_name)
+    };
+    let mut events = vec![(recipients, combat_line)];
+    events.extend(move_events);
+    (response, events)
 }
-
 
 fn handle_command(
     line: &str,
     player_name: &mut Option<String>,
-    world: &SharedWorld
+    world: &SharedWorld,
 ) -> (String, Vec<Event>) {
     let trimmed = line.trim();
     if trimmed.chars().any(char::is_control) {
@@ -525,27 +585,27 @@ fn handle_command(
             let player = Player {
                 name: name.to_string(),
                 room_id: "square".to_string(),
-				group_id: None,
-				invites: Vec::new(),
+                group_id: None,
+                invites: Vec::new(),
                 max_hp: 100,
                 hp: 100,
-				power: 10,
+                power: 10,
                 inventory: Vec::new(),
                 active_quests: HashMap::new(),
                 completed_quests: HashSet::new(),
                 statuses: Vec::new(),
-				combat_target: None
+                combat_target: None,
             };
-			let player_clone: Player = player.clone();
+            let player_clone: Player = player.clone();
             w.players.insert(name.to_string(), player);
             *player_name = Some(name.to_string());
             println!("Player {} connected", name);
 
             let response = "OK connected\n".to_string();
             let events: Vec<Event> = vec![(
-				players_in_scope(&player_clone, &w, ViewScope::Room),
-				format!("EVT ROOM PRESENCE ENTER {}\n", name)
-			)];
+                players_in_scope(&player_clone, &w, ViewScope::Room),
+                format!("EVT ROOM PRESENCE ENTER {}\n", name),
+            )];
             (response, events)
         }
 
@@ -554,28 +614,38 @@ fn handle_command(
                 let w = world.lock().unwrap();
                 if let Some(player) = w.players.get(name) {
                     if let Some(room) = w.rooms.get(&player.room_id) {
-                        let players_here: Vec<&String> = w.players.iter()
+                        let players_here: Vec<&String> = w
+                            .players
+                            .iter()
                             .filter(|(_, p)| p.room_id == player.room_id)
                             .map(|(n, _)| n)
                             .collect();
 
-                        let quest_givers: Vec<&String> = room.npcs.iter()
-                            .filter(|npc_id| w.quests.iter().any(|(quest_id, quest)|
-                                quest.giver.as_str() == npc_id.as_str()
-                                && !player.completed_quests.contains(quest_id)
-                                && !player.active_quests.contains_key(quest_id)))
+                        let quest_givers: Vec<&String> = room
+                            .npcs
+                            .iter()
+                            .filter(|npc_id| {
+                                w.quests.iter().any(|(quest_id, quest)| {
+                                    quest.giver.as_str() == npc_id.as_str()
+                                        && !player.completed_quests.contains(quest_id)
+                                        && !player.active_quests.contains_key(quest_id)
+                                })
+                            })
                             .collect();
 
-                        let res = format!("OK {}\n", serde_json::json!({
-                            "room": room.name,
-                            "desc": room.description,
-                            "exits": room.exits.keys().collect::<Vec<_>>(),
-                            "players": players_here,
-                            "items": room.items.iter().collect::<Vec<_>>(),
-                            "npcs": room.npcs.iter().collect::<Vec<_>>(),
-                            "available_quests": quest_givers,
-                            "your_hp": player.hp
-                        }));
+                        let res = format!(
+                            "OK {}\n",
+                            serde_json::json!({
+                                "room": room.name,
+                                "desc": room.description,
+                                "exits": room.exits.keys().collect::<Vec<_>>(),
+                                "players": players_here,
+                                "items": room.items.iter().collect::<Vec<_>>(),
+                                "npcs": room.npcs.iter().collect::<Vec<_>>(),
+                                "available_quests": quest_givers,
+                                "your_hp": player.hp
+                            })
+                        );
                         (res, Vec::new())
                     } else {
                         ("ERR room_not_found\n".to_string(), Vec::new())
@@ -597,7 +667,9 @@ fn handle_command(
                     None => return ("ERR not_connected\n".to_string(), Vec::new()),
                 };
 
-                let next_room_id = w.rooms.get(&current_room_id)
+                let next_room_id = w
+                    .rooms
+                    .get(&current_room_id)
                     .and_then(|r| r.exits.get(*direction))
                     .cloned();
 
@@ -619,13 +691,24 @@ fn handle_command(
                 let mut w = world.lock().unwrap();
                 let room_id = w.players.get(name).unwrap().room_id.clone();
 
-                let target_item_id = w.rooms.get(&room_id).unwrap().items.iter().find(|id| {
-                    if **id == item_query { return true; }
-                    if let Some(it) = w.items.get(*id) {
-                        if it.name.eq_ignore_ascii_case(item_query) { return true; }
-                    }
-                    false
-                }).cloned();
+                let target_item_id = w
+                    .rooms
+                    .get(&room_id)
+                    .unwrap()
+                    .items
+                    .iter()
+                    .find(|id| {
+                        if **id == item_query {
+                            return true;
+                        }
+                        if let Some(it) = w.items.get(*id) {
+                            if it.name.eq_ignore_ascii_case(item_query) {
+                                return true;
+                            }
+                        }
+                        false
+                    })
+                    .cloned();
 
                 if let Some(id) = target_item_id {
                     let obtainable = w.items.get(&id).unwrap().obtainable;
@@ -639,7 +722,6 @@ fn handle_command(
                     let events = advance_quests(&mut w, name, Trigger::Collect);
                     log_items(ItemEvent::TAKE, &id, &room_id, &name);
                     (format!("OK taken={}\n", id), events)
-
                 } else {
                     ("ERR item_not_found\n".to_string(), Vec::new())
                 }
@@ -653,13 +735,23 @@ fn handle_command(
                 let item_query = trimmed["DROP ".len()..].trim();
                 let mut w = world.lock().unwrap();
 
-                let item_index = w.players.get(name).unwrap().inventory.iter().position(|id| {
-                    if *id == item_query { return true; }
-                    if let Some(it) = w.items.get(id) {
-                        if it.name.eq_ignore_ascii_case(item_query) { return true; }
-                    }
-                    false
-                });
+                let item_index = w
+                    .players
+                    .get(name)
+                    .unwrap()
+                    .inventory
+                    .iter()
+                    .position(|id| {
+                        if *id == item_query {
+                            return true;
+                        }
+                        if let Some(it) = w.items.get(id) {
+                            if it.name.eq_ignore_ascii_case(item_query) {
+                                return true;
+                            }
+                        }
+                        false
+                    });
 
                 if let Some(idx) = item_index {
                     let player = w.players.get_mut(name).unwrap();
@@ -682,7 +774,10 @@ fn handle_command(
             if let Some(name) = player_name {
                 let w = world.lock().unwrap();
                 let player = w.players.get(name).unwrap();
-                (format!("OK {}\n", serde_json::json!(player.inventory)), Vec::new())
+                (
+                    format!("OK {}\n", serde_json::json!(player.inventory)),
+                    Vec::new(),
+                )
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
@@ -703,7 +798,8 @@ fn handle_command(
                     } else {
                         "..."
                     };
-                    let response = format!("OK npc=\"{}\" talk=\"{}\"\n", npc_data.name, response_text);
+                    let response =
+                        format!("OK npc=\"{}\" talk=\"{}\"\n", npc_data.name, response_text);
 
                     let events = advance_quests(&mut w, name, Trigger::Talk(&id));
                     (response, events)
@@ -725,7 +821,7 @@ fn handle_command(
 
                 let npc_id = match target_npc_id {
                     Some(id) => id,
-                    None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+                    None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new()),
                 };
 
                 if w.npcs.get(&npc_id).unwrap().npc_type != "enemy" {
@@ -767,7 +863,7 @@ fn handle_command(
             }
         }
 
-		_ if trimmed.starts_with("QUEST ") => {
+        _ if trimmed.starts_with("QUEST ") => {
             if let Some(name) = player_name {
                 let npc_query = trimmed["QUEST ".len()..].trim();
                 let mut w = world.lock().unwrap();
@@ -775,33 +871,40 @@ fn handle_command(
                 let room_id = w.players.get(name).unwrap().room_id.clone();
                 let npc_id = match find_npc(&w, &room_id, npc_query) {
                     Some(id) => id,
-                    None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
+                    None => return ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new()),
                 };
 
                 let player = w.players.get(name).unwrap();
                 let mut found_quest: Option<String> = None;
                 for (quest_id, quest) in &w.quests {
                     if quest.giver == npc_id
-						&& !player.completed_quests.contains(quest_id)
-						&& !player.active_quests.contains_key(quest_id)
-					{
+                        && !player.completed_quests.contains(quest_id)
+                        && !player.active_quests.contains_key(quest_id)
+                    {
                         found_quest = Some(quest_id.clone());
                         break;
                     }
                 }
                 let quest_id = match found_quest {
                     Some(id) => id,
-                    None => return ("ERR 406 NO_QUEST_AVAILABLE\n".to_string(), Vec::new())
+                    None => return ("ERR 406 NO_QUEST_AVAILABLE\n".to_string(), Vec::new()),
                 };
 
                 let quest = w.quests.get(&quest_id).unwrap();
-                let response = format!("OK {}\n", serde_json::json!({
-                    "quest_id": quest_id,
-                    "description": quest.description,
-                    "reward": quest.reward,
-                    "status": "received"
-                }));
-				w.players.get_mut(name).unwrap().active_quests.insert(quest_id.clone(), 0);
+                let response = format!(
+                    "OK {}\n",
+                    serde_json::json!({
+                        "quest_id": quest_id,
+                        "description": quest.description,
+                        "reward": quest.reward,
+                        "status": "received"
+                    })
+                );
+                w.players
+                    .get_mut(name)
+                    .unwrap()
+                    .active_quests
+                    .insert(quest_id.clone(), 0);
                 (response, Vec::new())
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
@@ -821,9 +924,9 @@ fn handle_command(
                     };
                     let total = quest.steps.len();
                     let task = match quest.steps.get(*step) {
-						Some(qs) => qs.description.as_str(),
-						None => ""
-					};
+                        Some(qs) => qs.description.as_str(),
+                        None => "",
+                    };
                     quests_json.push(serde_json::json!({
                         "quest_id": quest_id,
                         "status": "active",
@@ -838,34 +941,37 @@ fn handle_command(
                     }));
                 }
 
-                (format!("OK {}\n", serde_json::json!(quests_json)), Vec::new())
+                (
+                    format!("OK {}\n", serde_json::json!(quests_json)),
+                    Vec::new(),
+                )
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
-		["CHAT", _] => ("ERR EMPTY_MESSAGE\n".to_string(), Vec::new()),
+        ["CHAT", _] => ("ERR EMPTY_MESSAGE\n".to_string(), Vec::new()),
         ["CHAT", channel, msg] => {
             if let Some(name) = player_name {
-				let w = world.lock().unwrap();
-        		let player = w.players.get(name).unwrap();
-				let scope = match *channel {
-					"GLOBAL" => ViewScope::Global,
-					"ROOM"   => ViewScope::Room,
-					"GROUP"  => ViewScope::Group,
-					_ => return ("ERR BAD_SCOPE\n".to_string(), Vec::new())
-				};
+                let w = world.lock().unwrap();
+                let player = w.players.get(name).unwrap();
+                let scope = match *channel {
+                    "GLOBAL" => ViewScope::Global,
+                    "ROOM" => ViewScope::Room,
+                    "GROUP" => ViewScope::Group,
+                    _ => return ("ERR BAD_SCOPE\n".to_string(), Vec::new()),
+                };
 
-				if matches!(scope, ViewScope::Group) && player.group_id.is_none() {
-					return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new());
-				}
+                if matches!(scope, ViewScope::Group) && player.group_id.is_none() {
+                    return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new());
+                }
 
-				let response = "OK\n".to_string();
-				let event: Vec<Event> = vec![(
-					players_in_scope(player, &w, scope),
-					format!("EVT {} CHAT {} {}\n", channel, name, msg)
-				)];
-				(response, event)
+                let response = "OK\n".to_string();
+                let event: Vec<Event> = vec![(
+                    players_in_scope(player, &w, scope),
+                    format!("EVT {} CHAT {} {}\n", channel, name, msg),
+                )];
+                (response, event)
             } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
@@ -874,145 +980,160 @@ fn handle_command(
         ["WHO"] => {
             let w = world.lock().unwrap();
             let names: Vec<&String> = w.players.keys().collect();
-            let res = format!("OK {}\n", serde_json::json!({
-                "server": names.len(),
-                "players": names
-            }));
+            let res = format!(
+                "OK {}\n",
+                serde_json::json!({
+                    "server": names.len(),
+                    "players": names
+                })
+            );
             (res, Vec::new())
         }
 
-		["STATUS"] => {
-			if let Some(name) = player_name {
-				let w = world.lock().unwrap();
-				let player = w.players.get(name).unwrap();
+        ["STATUS"] => {
+            if let Some(name) = player_name {
+                let w = world.lock().unwrap();
+                let player = w.players.get(name).unwrap();
 
-				let status = if player.statuses.is_empty() {
-					"healthy".to_string()
-				} else {
-					let str_statuses: Vec<&str> = player.statuses.iter().map(|s| s.as_str()).collect();
-					str_statuses.join(", ")
-				};
+                let status = if player.statuses.is_empty() {
+                    "healthy".to_string()
+                } else {
+                    let str_statuses: Vec<&str> =
+                        player.statuses.iter().map(|s| s.as_str()).collect();
+                    str_statuses.join(", ")
+                };
 
-				let res = format!("OK {}\n", serde_json::json!({
-					"hp": player.hp,
-					"max_hp": player.max_hp,
-					"status": status
-				}));
-				(res, Vec::new())
-			} else {
+                let res = format!(
+                    "OK {}\n",
+                    serde_json::json!({
+                        "hp": player.hp,
+                        "max_hp": player.max_hp,
+                        "status": status
+                    })
+                );
+                (res, Vec::new())
+            } else {
                 ("ERR not_connected\n".to_string(), Vec::new())
             }
         }
 
-		["GROUP", "CREATE"] => {
-			if let Some(name) = player_name {
-				let mut w = world.lock().unwrap();
-				let player = w.players.get_mut(name).unwrap();
+        ["GROUP", "CREATE"] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+                let player = w.players.get_mut(name).unwrap();
 
-				if player.group_id.is_some() {
-					return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
-				}
+                if player.group_id.is_some() {
+                    return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
+                }
 
-				player.group_id = Some(name.clone());
-				(format!("OK group={}\n", name), Vec::new())
+                player.group_id = Some(name.clone());
+                (format!("OK group={}\n", name), Vec::new())
             } else {
-				("ERR not_connected\n".to_string(), Vec::new())
-			}
-		}
-
-		["GROUP", "INVITE", target_name] => {
-			if let Some(name) = player_name {
-				let mut w = world.lock().unwrap();
-				let player = w.players.get(name).unwrap();
-				let group_name = match &player.group_id {
-					Some(n) => n.clone(),
-					None => return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new())
-				};
-				if *target_name == name.as_str() {
-					return ("ERR CANT_INVITE_SELF\n".to_string(), Vec::new());
-				}
-				let target = match w.players.get_mut(*target_name) {
-					Some(t) => t,
-					None => return ("ERR PLAYER_NOT_FOUND\n".to_string(), Vec::new())
-				};
-
-				if target.group_id.is_some() {
-					return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
-				}
-				if target.invites.contains(&group_name) {
-					return ("ERR ALREADY_INVITED\n".to_string(), Vec::new())
-				}
-				target.invites.push(group_name.clone());
-
-				let response = "OK\n".to_string();
-				let events: Vec<Event> = vec![(
-					vec![target_name.to_string()],
-					format!("EVT GROUP INVITE {}\n", group_name)
-				)];
-				(response, events)
-            } else {
-				("ERR not_connected\n".to_string(), Vec::new())
-			}
-		}
-
-		["GROUP", "JOIN", leader_name] => {
-			if let Some(name) = player_name {
-				let mut w = world.lock().unwrap();
-
-				let player = w.players.get(name).unwrap();
-				if player.group_id.is_some() {
-					return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
-				}
-				if !player.invites.iter().any(|invite| invite.as_str() == *leader_name) {
-					return ("ERR NOT_INVITED\n".to_string(), Vec::new());
-				}
-
-				let group_exists = w.players.values()
-					.any(|p| p.group_id.as_deref() == Some(*leader_name));
-				if !group_exists {
-					return ("ERR GROUP_NOT_FOUND\n".to_string(), Vec::new());
-				}
-
-				let player = w.players.get_mut(name).unwrap();
-				player.group_id = Some(leader_name.to_string());
-				player.invites.retain(|invite| invite.as_str() != *leader_name);
-
-				let player = w.players.get(name).unwrap();
-				let recipients: Vec<String> = players_in_scope(player, &w, ViewScope::Group)
-					.into_iter().filter(|n| n.as_str() != name.as_str()).collect();
-
-				let response = format!("OK group={}\n", leader_name);
-				let events: Vec<Event> = vec![(
-					recipients,
-					format!("EVT GROUP JOIN {}\n", name)
-				)];
-				(response, events)
-            } else {
-				("ERR not_connected\n".to_string(), Vec::new())
-			}
-		}
-
-		["GROUP", "LEAVE"] => {
-			if let Some(name) = player_name {
-				let mut w = world.lock().unwrap();
-				let in_group = w.players.get(name).map(|p| p.group_id.is_some()).unwrap_or(false);
-				if !in_group {
-					return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new());
-				}
-				("OK\n".to_string(), leave_group(&mut w, name))
-			} else {
-				("ERR not_connected\n".to_string(), Vec::new())
-			}
-		}
-
-        ["QUIT"] => {
-            ("OK bye\n".to_string(), Vec::new())
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
         }
+
+        ["GROUP", "INVITE", target_name] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+                let player = w.players.get(name).unwrap();
+                let group_name = match &player.group_id {
+                    Some(n) => n.clone(),
+                    None => return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new()),
+                };
+                if *target_name == name.as_str() {
+                    return ("ERR CANT_INVITE_SELF\n".to_string(), Vec::new());
+                }
+                let target = match w.players.get_mut(*target_name) {
+                    Some(t) => t,
+                    None => return ("ERR PLAYER_NOT_FOUND\n".to_string(), Vec::new()),
+                };
+
+                if target.group_id.is_some() {
+                    return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
+                }
+                if target.invites.contains(&group_name) {
+                    return ("ERR ALREADY_INVITED\n".to_string(), Vec::new());
+                }
+                target.invites.push(group_name.clone());
+
+                let response = "OK\n".to_string();
+                let events: Vec<Event> = vec![(
+                    vec![target_name.to_string()],
+                    format!("EVT GROUP INVITE {}\n", group_name),
+                )];
+                (response, events)
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["GROUP", "JOIN", leader_name] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+
+                let player = w.players.get(name).unwrap();
+                if player.group_id.is_some() {
+                    return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
+                }
+                if !player
+                    .invites
+                    .iter()
+                    .any(|invite| invite.as_str() == *leader_name)
+                {
+                    return ("ERR NOT_INVITED\n".to_string(), Vec::new());
+                }
+
+                let group_exists = w
+                    .players
+                    .values()
+                    .any(|p| p.group_id.as_deref() == Some(*leader_name));
+                if !group_exists {
+                    return ("ERR GROUP_NOT_FOUND\n".to_string(), Vec::new());
+                }
+
+                let player = w.players.get_mut(name).unwrap();
+                player.group_id = Some(leader_name.to_string());
+                player
+                    .invites
+                    .retain(|invite| invite.as_str() != *leader_name);
+
+                let player = w.players.get(name).unwrap();
+                let recipients: Vec<String> = players_in_scope(player, &w, ViewScope::Group)
+                    .into_iter()
+                    .filter(|n| n.as_str() != name.as_str())
+                    .collect();
+
+                let response = format!("OK group={}\n", leader_name);
+                let events: Vec<Event> = vec![(recipients, format!("EVT GROUP JOIN {}\n", name))];
+                (response, events)
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["GROUP", "LEAVE"] => {
+            if let Some(name) = player_name {
+                let mut w = world.lock().unwrap();
+                let in_group = w
+                    .players
+                    .get(name)
+                    .map(|p| p.group_id.is_some())
+                    .unwrap_or(false);
+                if !in_group {
+                    return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new());
+                }
+                ("OK\n".to_string(), leave_group(&mut w, name))
+            } else {
+                ("ERR not_connected\n".to_string(), Vec::new())
+            }
+        }
+
+        ["QUIT"] => ("OK bye\n".to_string(), Vec::new()),
 
         _ => ("ERR unknown_command\n".to_string(), Vec::new()),
     }
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -1025,7 +1146,7 @@ async fn main() {
     };
 
     let world: SharedWorld = Arc::new(Mutex::new(world_data));
-	let mailboxes: Mailboxes = Arc::new(Mutex::new(HashMap::new()));
+    let mailboxes: Mailboxes = Arc::new(Mutex::new(HashMap::new()));
     let limiter = Arc::new(Semaphore::new(2));
 
     let listener = TcpListener::bind("0.0.0.0:4242").await.unwrap();
@@ -1047,7 +1168,7 @@ async fn main() {
         log_connection(addr, ConnectEvent::CONNECTION, LogLvl::INFO);
 
         let world_clone = Arc::clone(&world);
-		let boxes_clone: Mailboxes = Arc::clone(&mailboxes);
+        let boxes_clone: Mailboxes = Arc::clone(&mailboxes);
 
         tokio::spawn(async move {
             handle_client(socket, addr, world_clone, boxes_clone).await;
@@ -1060,11 +1181,11 @@ async fn handle_client(
     socket: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
     world: SharedWorld,
-	mailboxes: Mailboxes
+    mailboxes: Mailboxes,
 ) {
     let (reader, mut writer) = socket.into_split();
     let mut lines = FramedRead::new(reader, LinesCodec::new_with_max_length(1024));
-	let (mailbox_tx, mut mailbox_rx) = mpsc::unbounded_channel::<String>();
+    let (mailbox_tx, mut mailbox_rx) = mpsc::unbounded_channel::<String>();
 
     let mut player_name: Option<String> = None;
     let mut tokens: f64 = 10.0;
@@ -1107,14 +1228,14 @@ async fn handle_client(
                         }
                         tokens -= 1.0;
 
-						let was_connected = player_name.is_some();
+                        let was_connected = player_name.is_some();
                         let (response, event) = handle_command(&line, &mut player_name, &world);
                         log_response(&response, player_name.clone().unwrap_or("Undefined".to_string()));
-						if !was_connected {
-							if let Some(name) = &player_name {
-								mailboxes.lock().unwrap().insert(name.clone(), mailbox_tx.clone());
-							}
-						}
+                        if !was_connected {
+                            if let Some(name) = &player_name {
+                                mailboxes.lock().unwrap().insert(name.clone(), mailbox_tx.clone());
+                            }
+                        }
 
                         if let Err(e) = writer.write_all(response.as_bytes()).await {
                             println!("Write error for {}: {}", addr, e);
@@ -1123,11 +1244,11 @@ async fn handle_client(
 
                         for (recipients, msg) in event {
                             let boxes = mailboxes.lock().unwrap();
-							for name in recipients {
-								if let Some(box_tx) = boxes.get(&name) {
-									let _ = box_tx.send(msg.clone());
-								}
-							}
+                            for name in recipients {
+                                if let Some(box_tx) = boxes.get(&name) {
+                                    let _ = box_tx.send(msg.clone());
+                                }
+                            }
                         }
                     }
                 }
@@ -1140,7 +1261,7 @@ async fn handle_client(
                             break;
                         }
                     }
-					None => break
+                    None => break
                 }
             }
         }
@@ -1150,30 +1271,32 @@ async fn handle_client(
 async fn handle_disconnect(
     player_name: &Option<String>,
     world: &SharedWorld,
-    mailboxes: &Mailboxes
+    mailboxes: &Mailboxes,
 ) {
     if let Some(name) = player_name {
-		let events: Vec<Event> = {
-			let mut w = world.lock().unwrap();
-			let mut events = Vec::new();
-			if let Some(player) = w.players.get(name) {
-				let room: Vec<String> = players_in_scope(player, &w, ViewScope::Room)
-					.into_iter().filter(|n| n.as_str() != name.as_str()).collect();
-				events.push((room, format!("EVT ROOM PRESENCE LEAVE {}\n", name)));
-			}
-			events.extend(leave_group(&mut w, name));
-			w.players.remove(name);
-			events
-		};
+        let events: Vec<Event> = {
+            let mut w = world.lock().unwrap();
+            let mut events = Vec::new();
+            if let Some(player) = w.players.get(name) {
+                let room: Vec<String> = players_in_scope(player, &w, ViewScope::Room)
+                    .into_iter()
+                    .filter(|n| n.as_str() != name.as_str())
+                    .collect();
+                events.push((room, format!("EVT ROOM PRESENCE LEAVE {}\n", name)));
+            }
+            events.extend(leave_group(&mut w, name));
+            w.players.remove(name);
+            events
+        };
 
-		mailboxes.lock().unwrap().remove(name);
+        mailboxes.lock().unwrap().remove(name);
 
         let boxes = mailboxes.lock().unwrap();
         for (recipients, line) in events {
             for recipient in recipients {
                 if let Some(box_tx) = boxes.get(&recipient) {
-					let _ = box_tx.send(line.clone());
-				}
+                    let _ = box_tx.send(line.clone());
+                }
             }
         }
     }
