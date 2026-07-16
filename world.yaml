@@ -5,49 +5,111 @@ rooms:
     exits:
       north: "tavern"
       east: "shop"
+      south: "forest_path"
     items: ["old_sword"]
     npcs: ["old_man"]
+
   tavern:
     name: "The Tavern"
     description: "Une taverne chaleureuse."
     exits:
       south: "square"
+      east: "castle_gates"
     items: ["frothy_ale"]
     npcs: ["innkeeper"]
+
   shop:
     name: "General Store"
     description: "Un delhaize !"
     exits:
       west: "square"
+      south: "castle_gates"
     items: ["healing_herb"]
     npcs: ["goblin"]
+
+  castle_gates:
+    name: "Castle Gates"
+    description: "Les grandes portes du château fort, reliant la taverne et le magasin."
+    exits:
+      west: "tavern"
+      north: "shop"
+    items: []
+    npcs: []
+
+  forest_path:
+    name: "Forest Path"
+    description: "Un sentier sombre et verdoyant qui s'enfonce dans les bois."
+    exits:
+      north: "square"
+      east: "goblin_camp"
+      west: "abandoned_mine"
+    items: []
+    npcs: []
+
+  goblin_camp:
+    name: "Goblin Camp"
+    description: "Un campement de fortune établi par des gobelins pillards."
+    exits:
+      west: "forest_path"
+      north: "secret_shrine"
+    items: ["rusty_shield"]
+    npcs: ["goblin_scout"]
+
+  secret_shrine:
+    name: "Secret Shrine"
+    description: "Un autel antique caché derrière les feuillages, reconnecté à la place du village."
+    exits:
+      south: "goblin_camp"
+      north: "square"
+    items: ["ancient_relic"]
+    npcs: []
+
+  abandoned_mine:
+    name: "Abandoned Mine"
+    description: "Une mine de charbon abandonnée. C'est une impasse sombre."
+    exits:
+      east: "forest_path"
+    items: ["iron_ore"]
+    npcs: ["mining_drone"]
 
 items:
   old_sword:
     name: "Old Sword"
-    description: "Une épée"
+    description: "Une épée rouillée mais fonctionnelle."
     obtainable: true
   frothy_ale:
     name: "Frothy Ale"
-    description: "Une bière rafraîchissant"
+    description: "Une bière rafraîchissante."
     obtainable: true
   healing_herb:
     name: "Healing Herb"
-    description: "Une herbe aux vertues curatives."
+    description: "Une herbe aux vertus curatives."
+    obtainable: true
+  rusty_shield:
+    name: "Rusty Shield"
+    description: "Un vieux bouclier en bois renforcé de fer."
+    obtainable: true
+  iron_ore:
+    name: "Iron Ore"
+    description: "Un morceau de fer brut trouvé dans la mine."
+    obtainable: true
+  ancient_relic:
+    name: "Ancient Relic"
+    description: "Une relique mystique qui brille d'une lueur bleue."
     obtainable: true
   gold_coin:
     name: "Gold Coin"
-    description: "Une piece d'or brillante."
+    description: "Une pièce d'or brillante."
     obtainable: false
   hero_medal:
     name: "Hero Medal"
-    description: "Une medaille recompensant les heros."
+    description: "Une médaille récompensant les héros."
     obtainable: false
 
 npcs:
   old_man:
     name: "Old Man"
-    description: "Un vieux sage"
+    description: "Un vieux sage."
     dialogue: ["Salutations, voyageur !"]
     hp: 50
     npc_type: "friendly"
@@ -59,30 +121,43 @@ npcs:
     npc_type: "friendly"
   goblin:
     name: "Goblin"
-    description: "Un ."
+    description: "Un gobelin hargneux."
     dialogue: ["KREEE ! Tu vas mourir !"]
     hp: 50
+    npc_type: "enemy"
+  goblin_scout:
+    name: "Goblin Scout"
+    description: "Un éclaireur gobelin qui surveille le camp."
+    dialogue: ["Tu n'aurais pas dû venir ici !"]
+    hp: 40
+    npc_type: "enemy"
+  mining_drone:
+    name: "Mining Drone"
+    description: "Un automate minier détraqué qui tourne en rond."
+    dialogue: ["BIP... INTRUS DÉTECTÉ... BIP..."]
+    hp: 80
     npc_type: "enemy"
 
 quests:
   herb_hunt:
     giver: old_man
-    description: "Le vieux sage a besoin de fu... d'une herbe medicinale."
+    description: "Le vieux sage a besoin d'une herbe médicinale."
     reward: gold_coin
     steps:
       - description: "Aller jusqu'au magasin."
         kind: !reach
           room: shop
-      - description: "Ramasser l'herbe medicinale."
+      - description: "Ramasser l'herbe médicinale."
         kind: !collect
           item: healing_herb
           count: 1
       - description: "Retourner voir le vieux sage."
         kind: !talk
           npc: old_man
+
   goblin_slayer:
     giver: innkeeper
-    description: "L'aubergiste demande d'avoir, stp frero, l'amabilite d'aller eliminer le gobelin"
+    description: "L'aubergiste vous demande d'éliminer le gobelin qui squatte le magasin."
     reward: hero_medal
     steps:
       - description: "Aller jusqu'au magasin."
