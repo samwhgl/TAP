@@ -575,6 +575,10 @@ fn handle_command(
     match parts.as_slice() {
         ["CONNECT", name] => {
             let mut w = world.lock().unwrap();
+            if player_name.is_some() {
+                let res = "ERR 202 ALREADY_CONNECTED\n".to_string();
+                return (res, Vec::new());
+            }
             if w.players.contains_key(*name) {
                 let res = "ERR 201 NAME_IN_USE\n".to_string();
                 return (res, Vec::new());

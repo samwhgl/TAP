@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "Erreur : Impossible de se connecter au serveur. Vérifie qu'il est bien lancé !"
+                "ERR 900 CONNECTION_FAILED"
             );
             return Err(e.into());
         }

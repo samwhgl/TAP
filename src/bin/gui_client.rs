@@ -7,7 +7,7 @@ async fn main() -> eframe::Result {
     let socket = match TcpStream::connect("127.0.0.1:4242").await {
         Ok(s) => s,
         Err(e) => {
-            println!("Connection error: {}", e);
+            println!("ERR 900 CONNECTION_FAILED: {}", e);
             std::process::exit(1)
         }
     };
