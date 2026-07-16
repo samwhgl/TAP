@@ -175,7 +175,7 @@ impl World {
             for npc_id in &room.npcs {
                 if !config.npcs.contains_key(npc_id) {
                     return Err(format!(
-                        "Validation Error: La pièce '{}' contient le NPC '{}' absent du registre global !",
+                        "\"Validation Error: La pièce '{}' contient le NPC '{}' absent du registre global !\"",
                         room_id, npc_id
                     ).into());
                 }
@@ -185,14 +185,14 @@ impl World {
         for (quest_id, quest) in &config.quests {
             if !config.npcs.contains_key(&quest.giver) {
                 return Err(format!(
-                    "Validation Error: La quête '{}' a un giver '{}' inexistant !",
+                    "\"Validation Error: La quête '{}' a un giver '{}' inexistant !\"",
                     quest_id, quest.giver
                 )
                 .into());
             }
             if !config.items.contains_key(&quest.reward) {
                 return Err(format!(
-                    "Validation Error: La quête '{}' a une récompense '{}' inexistante !",
+                    "\"Validation Error: La quête '{}' a une récompense '{}' inexistante !\"",
                     quest_id, quest.reward
                 )
                 .into());
@@ -207,7 +207,7 @@ impl World {
                 };
                 if !exists {
                     return Err(format!(
-                        "Validation Error: La quête '{}' référence une cible '{}' inexistante !",
+                        "\"Validation Error: La quête '{}' référence une cible '{}' inexistante !\"",
                         quest_id, target
                     )
                     .into());
@@ -215,13 +215,13 @@ impl World {
             }
         }
 
-        println!(
+        log_msg(format!(
             "Monde validé ! {} pièces, {} objets, {} NPCs et {} quêtes chargés.",
             config.rooms.len(),
             config.items.len(),
             config.npcs.len(),
             config.quests.len()
-        );
+        ), LogLvl::INFO, LogType::INIT);
 
         Ok(World {
             players: HashMap::new(),
@@ -425,9 +425,9 @@ fn play_turn(world: &mut World, name: &str, action: CombatAction) -> (String, Ve
     let (npc_id, room_id, power) = match world.players.get(name) {
         Some(player) => match &player.combat_target {
             Some(target) => (target.clone(), player.room_id.clone(), player.power),
-            None => return ("ERR NOT_IN_COMBAT\n".to_string(), Vec::new()),
+            None => return ("ERR 404 NOT_IN_COMBAT\n".to_string(), Vec::new()),
         },
-        None => return ("ERR not_connected\n".to_string(), Vec::new()),
+        None => return ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new()),
     };
 
     let npc_name = match world.npcs.get(&npc_id) {
@@ -568,7 +568,7 @@ fn handle_command(
 ) -> (String, Vec<Event>) {
     let trimmed = line.trim_matches(char::is_control).trim();
     if trimmed.chars().any(char::is_control) {
-        return ("ERR CONTROL_CHARS\n".to_string(), Vec::new());
+        return ("ERR 404 CONTROL_CHARS\n".to_string(), Vec::new());
     }
     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
 
@@ -595,7 +595,6 @@ fn handle_command(
             let player_clone: Player = player.clone();
             w.players.insert(name.to_string(), player);
             *player_name = Some(name.to_string());
-            println!("Player {} connected", name);
 
             let response = "OK connected\n".to_string();
             let events: Vec<Event> = vec![(
@@ -644,13 +643,13 @@ fn handle_command(
                         );
                         (res, Vec::new())
                     } else {
-                        ("ERR room_not_found\n".to_string(), Vec::new())
+                        ("ERR 404 ROOM_NOT_FOUND\n".to_string(), Vec::new())
                     }
                 } else {
-                    ("ERR not_connected\n".to_string(), Vec::new())
+                    ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -660,7 +659,7 @@ fn handle_command(
 
                 let current_room_id = match w.players.get(name) {
                     Some(p) => p.room_id.clone(),
-                    None => return ("ERR not_connected\n".to_string(), Vec::new()),
+                    None => return ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new()),
                 };
 
                 let next_room_id = w
@@ -677,7 +676,7 @@ fn handle_command(
                     ("ERR 301 NO_EXIT\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -709,7 +708,7 @@ fn handle_command(
                 if let Some(id) = target_item_id {
                     let obtainable = w.items.get(&id).unwrap().obtainable;
                     if !obtainable {
-                        return ("ERR item_not_obtainable\n".to_string(), Vec::new());
+                        return ("ERR 404 ITEM_NOT_OBTAINABLE\n".to_string(), Vec::new());
                     }
 
                     w.rooms.get_mut(&room_id).unwrap().items.remove(&id);
@@ -719,10 +718,10 @@ fn handle_command(
                     log_items(ItemEvent::TAKE, &id, &room_id, &name);
                     (format!("OK taken={}\n", id), events)
                 } else {
-                    ("ERR item_not_found\n".to_string(), Vec::new())
+                    ("ERR 404 ITEM_NOT_FOUND\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -759,10 +758,10 @@ fn handle_command(
                     log_items(ItemEvent::DROP, &id, &room_id, &name);
                     (format!("OK dropped={}\n", id), Vec::new())
                 } else {
-                    ("ERR item_not_in_inventory\n".to_string(), Vec::new())
+                    ("ERR 404 ITEM_NOT_IN_INVENTORY\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -775,7 +774,7 @@ fn handle_command(
                     Vec::new(),
                 )
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -800,10 +799,10 @@ fn handle_command(
                     let events = advance_quests(&mut w, name, Trigger::Talk(&id));
                     (response, events)
                 } else {
-                    ("ERR npc_not_found\n".to_string(), Vec::new())
+                    ("ERR 404 NPC_NOT_FOUND\n".to_string(), Vec::new())
                 }
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -828,7 +827,7 @@ fn handle_command(
 
                 play_turn(&mut w, name, CombatAction::Attack)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -837,7 +836,7 @@ fn handle_command(
                 let mut w = world.lock().unwrap();
                 play_turn(&mut w, name, CombatAction::Attack)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -846,7 +845,7 @@ fn handle_command(
                 let mut w = world.lock().unwrap();
                 play_turn(&mut w, name, CombatAction::Defend)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -855,7 +854,7 @@ fn handle_command(
                 let mut w = world.lock().unwrap();
                 play_turn(&mut w, name, CombatAction::Flee)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -903,7 +902,7 @@ fn handle_command(
                     .insert(quest_id.clone(), 0);
                 (response, Vec::new())
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -942,11 +941,11 @@ fn handle_command(
                     Vec::new(),
                 )
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
-        ["CHAT", _] => ("ERR EMPTY_MESSAGE\n".to_string(), Vec::new()),
+        ["CHAT", _] => ("ERR 404 EMPTY_MESSAGE\n".to_string(), Vec::new()),
         ["CHAT", channel, msg] => {
             if let Some(name) = player_name {
                 let w = world.lock().unwrap();
@@ -955,7 +954,7 @@ fn handle_command(
                     "GLOBAL" => ViewScope::Global,
                     "ROOM" => ViewScope::Room,
                     "GROUP" => ViewScope::Group,
-                    _ => return ("ERR BAD_SCOPE\n".to_string(), Vec::new()),
+                    _ => return ("ERR 401 BAD_SCOPE\n".to_string(), Vec::new()),
                 };
 
                 if matches!(scope, ViewScope::Group) && player.group_id.is_none() {
@@ -969,7 +968,7 @@ fn handle_command(
                 )];
                 (response, event)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -1009,7 +1008,7 @@ fn handle_command(
                 );
                 (res, Vec::new())
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -1025,7 +1024,7 @@ fn handle_command(
                 player.group_id = Some(name.clone());
                 (format!("OK group={}\n", name), Vec::new())
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -1038,18 +1037,18 @@ fn handle_command(
                     None => return ("ERR 401 NOT_IN_GROUP\n".to_string(), Vec::new()),
                 };
                 if *target_name == name.as_str() {
-                    return ("ERR CANT_INVITE_SELF\n".to_string(), Vec::new());
+                    return ("ERR 407 CANT_INVITE_SELF\n".to_string(), Vec::new());
                 }
                 let target = match w.players.get_mut(*target_name) {
                     Some(t) => t,
-                    None => return ("ERR PLAYER_NOT_FOUND\n".to_string(), Vec::new()),
+                    None => return ("ERR 404 PLAYER_NOT_FOUND\n".to_string(), Vec::new()),
                 };
 
                 if target.group_id.is_some() {
                     return ("ERR 402 ALREADY_IN_GROUP\n".to_string(), Vec::new());
                 }
                 if target.invites.contains(&group_name) {
-                    return ("ERR ALREADY_INVITED\n".to_string(), Vec::new());
+                    return ("ERR 408 ALREADY_INVITED\n".to_string(), Vec::new());
                 }
                 target.invites.push(group_name.clone());
 
@@ -1060,7 +1059,7 @@ fn handle_command(
                 )];
                 (response, events)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -1077,7 +1076,7 @@ fn handle_command(
                     .iter()
                     .any(|invite| invite.as_str() == *leader_name)
                 {
-                    return ("ERR NOT_INVITED\n".to_string(), Vec::new());
+                    return ("ERR 409 NOT_INVITED\n".to_string(), Vec::new());
                 }
 
                 let group_exists = w
@@ -1085,7 +1084,7 @@ fn handle_command(
                     .values()
                     .any(|p| p.group_id.as_deref() == Some(*leader_name));
                 if !group_exists {
-                    return ("ERR GROUP_NOT_FOUND\n".to_string(), Vec::new());
+                    return ("ERR 404 GROUP_NOT_FOUND\n".to_string(), Vec::new());
                 }
 
                 let player = w.players.get_mut(name).unwrap();
@@ -1104,7 +1103,7 @@ fn handle_command(
                 let events: Vec<Event> = vec![(recipients, format!("EVT GROUP JOIN {}\n", name))];
                 (response, events)
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
@@ -1121,13 +1120,13 @@ fn handle_command(
                 }
                 ("OK\n".to_string(), leave_group(&mut w, name))
             } else {
-                ("ERR not_connected\n".to_string(), Vec::new())
+                ("ERR 403 NOT_CONNECTED\n".to_string(), Vec::new())
             }
         }
 
         ["QUIT"] => ("OK bye\n".to_string(), Vec::new()),
 
-        _ => ("ERR unknown_command\n".to_string(), Vec::new()),
+        _ => ("ERR 404 UNKNOWN_COMMAND\n".to_string(), Vec::new()),
     }
 }
 
@@ -1136,7 +1135,7 @@ async fn main() {
     let world_data = match World::from_file("world.yaml") {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("Critical Error while starting server : {}", e);
+            log_msg(format!("Critical Error while starting server : {}", e), LogLvl::ERROR, LogType::INIT);
             std::process::exit(1);
         }
     };
@@ -1145,7 +1144,13 @@ async fn main() {
     let mailboxes: Mailboxes = Arc::new(Mutex::new(HashMap::new()));
     let limiter = Arc::new(Semaphore::new(2));
 
-    let listener = TcpListener::bind("0.0.0.0:4242").await.unwrap();
+    let listener = match TcpListener::bind("0.0.0.0:4242").await {
+        Ok(r) => r,
+        Err(e) => {
+            log_msg(format!("Critical Error while starting server : {}", e), LogLvl::ERROR, LogType::INIT);
+            std::process::exit(1);
+        }
+    };
     println!("Server listening on port 4242");
 
     loop {
@@ -1155,7 +1160,6 @@ async fn main() {
             Ok(permit) => permit,
             Err(_) => {
                 log_connection(addr, ConnectEvent::REFUSED, LogLvl::WARN);
-                //println!("Connection refused (server full): {}", addr);
                 let _ = socket.write_all(b"ERR 503 SERVER_FULL\n").await;
                 continue;
             }
@@ -1223,7 +1227,7 @@ async fn handle_client(
                         tokens = (tokens + now.duration_since(last_refill).as_secs_f64() * 5.0).min(10.0);
                         last_refill = now;
                         if tokens < 1.0 {
-                            let _ = writer.write_all(b"ERR RATE_LIMITED\n").await;
+                            let _ = writer.write_all(b"ERR 403 RATE_LIMITED\n").await;
                             continue;
                         }
                         tokens -= 1.0;

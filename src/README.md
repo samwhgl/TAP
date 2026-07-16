@@ -16,24 +16,18 @@ in real time.
 
 This implementation is written in **Rust** and delivers:
 
-- **`tap_server`** — the authoritative TCP server. It loads and validates
+- **`tap_server`**: the authoritative TCP server. It loads and validates
   the world from a YAML file, keeps all game state (players, rooms, items,
   NPCs, quests, combat), and speaks the RFC 42TAP protocol over line-based
   TCP (UTF-8, `\n`-terminated messages).
-- **`tap_cli`** — a minimal command-line client. It forwards raw protocol
+- **`tap_cli`**: a minimal command-line client. It forwards raw protocol
   commands typed by the user straight to the server and prints every
   incoming line (replies and asynchronous events) as it arrives.
 - **A GUI client** (`gui_layout.rs`, built with [`egui`](https://www.egui.rs/)
   / [`eframe`](https://crates.io/crates/eframe)) providing room details,
   separate Global/Room/Group chat panes, inventory and action buttons.
-- **`world.yaml`** — the static world data (rooms, items, NPCs, quests).
+- **`world.yaml`**: the static world data (rooms, items, NPCs, quests).
 
-> **Note:** `Cargo.toml` currently declares two binaries only
-> (`tap_server` and `tap_cli`). `gui_layout.rs` is exposed through `lib.rs`
-> but has no `[[bin]]` entry pointing to it yet — you need to add one
-> (e.g. `name = "tap_gui"`, `path = "src/gui_main.rs"`) together with the
-> small `main()` that instantiates `GuiWindow` before `cargo run --bin
-> tap_gui` will work. Update this section once that entry is added.
 
 ## Instructions
 
@@ -54,21 +48,6 @@ cargo run --release --bin tap_cli
 See [Building and Running](#building-and-running) below for the full set of
 commands (lint, clean, GUI, etc.).
 
-## Resources
-
-- [RFC 42TAP — The Answer Protocol](.) (attached subject document): the
-  authoritative protocol specification this project implements.
-- [Tokio documentation](https://tokio.rs/) — asynchronous runtime, TCP
-  networking, channels, `tokio-util` `LinesCodec` framing.
-- [serde / serde_yaml documentation](https://serde.rs/) — world data
-  (de)serialization.
-- [egui / eframe documentation](https://www.egui.rs/) — immediate-mode GUI
-  toolkit used for the graphical client.
-- General references on MUDs and line-based TCP protocols (Telnet, classic
-  MUD RFCs) for background on the genre.
-- **AI usage:** AI was used to draft the initial Tokio
-  event loop skeleton in `main.rs`, which was then reviewed, corrected and
-  extended by the team
 
 ## Architecture
 
@@ -246,7 +225,6 @@ response log) instead of being processed.
 | `kprist` |  GUI client (egui/eframe), world design (world.yaml) |
 | `baderwae` |  logging, protocol documentation, testing |
 
-*(Fill in with each team member's actual contributions before submission.)*
 
 ## Building and Running
 
@@ -254,14 +232,11 @@ Build tool: **Cargo** (Rust 2024 edition), as declared in `Cargo.toml`.
 
 | Task | Command |
 |---|---|
-| Install dependencies | `cargo fetch` (or simply `cargo build`, which fetches and compiles) |
 | Build (debug) | `cargo build` |
 | Build (release) | `cargo build --release` |
 | Run the server | `cargo run --bin tap_server` *(run from the directory containing `world.yaml`)* |
 | Run the CLI client | `cargo run --bin tap_cli` |
-| Run the GUI client | `cargo run --bin tap_gui` *(add the corresponding `[[bin]]` entry in `Cargo.toml` first — see note above)* |
-| Lint | `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt --check` |
-| Format | `cargo fmt` |
+| Run the GUI client | `cargo run --bin tap_gui`|
 | Clean | `cargo clean` |
 
 The server listens on `0.0.0.0:4242`; both clients connect to
@@ -296,3 +271,19 @@ test suite is included yet:
    `PRESENCE LEAVE`; open more than the connection limit at once to see
    `ERR 503 SERVER_FULL`; send commands rapidly to trigger
    `ERR RATE_LIMITED`.
+   
+## Resources
+
+- [RFC 42TAP — The Answer Protocol](.) (attached subject document): the
+  authoritative protocol specification this project implements.
+- [Tokio documentation](https://tokio.rs/) — asynchronous runtime, TCP
+  networking, channels, `tokio-util` `LinesCodec` framing.
+- [serde / serde_yaml documentation](https://serde.rs/) — world data
+  (de)serialization.
+- [egui / eframe documentation](https://www.egui.rs/) — immediate-mode GUI
+  toolkit used for the graphical client.
+- General references on MUDs and line-based TCP protocols (Telnet, classic
+  MUD RFCs) for background on the genre.
+- **AI usage:** AI was used to draft the initial Tokio
+  event loop skeleton in `main.rs`, which was then reviewed, corrected and
+  extended by the team

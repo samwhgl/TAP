@@ -11,6 +11,7 @@ pub enum LogType {
     RESPONSE,
     QUEST,
     ITEM,
+    INIT,
 }
 
 pub enum ConnectEvent {
@@ -43,6 +44,7 @@ pub fn log_msg(msg: String, log_lvl: LogLvl, ltype: LogType) {
         LogType::RESPONSE => "RESPONSE",
         LogType::QUEST => "QUEST",
         LogType::ITEM => "ITEM",
+        LogType::INIT => "INIT",
     };
     match log_lvl {
         LogLvl::INFO => println!(
